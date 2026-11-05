@@ -143,7 +143,11 @@ func (d *Detector) nameCandidates(v *DocView) []pii.Candidate {
 		}
 	}
 	// 2) title-driven and 3) dictionary-driven
+	coveredEnd := -1 // a dictionary span already covers words up to here
 	for i, w := range words {
+		if w.s < coveredEnd {
+			continue
+		}
 		if gazetteer.IsTitle(w.t) {
 			if i+1 < len(words) {
 				if s, e, n := span(i+1, 3); n >= 1 {
@@ -169,6 +173,7 @@ func (d *Detector) nameCandidates(v *DocView) []pii.Candidate {
 			}
 			if dict >= 1 {
 				emit(s, e, dict >= 2)
+				coveredEnd = e
 			}
 		}
 	}

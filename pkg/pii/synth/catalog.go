@@ -21,16 +21,19 @@ type Field struct {
 	Weight int // relative frequency when sampling distractors / extra fields
 }
 
-// Pool returns "train", "test" or "" (shared) for a label or template string.
-// It is a deterministic hash so the split is reproducible and so that the
-// held-out test set contains phrasings never seen in training.
+// Pool returns "train", "dev", "test" or "" (shared) for a label or template
+// string. It is a deterministic hash so the split is reproducible, so that
+// dev contains phrasings never seen in training (thresholds are chosen on
+// them) and test contains phrasings seen in neither train nor dev.
 func Pool(s string) string {
 	h := fnv.New32a()
 	h.Write([]byte(s))
 	switch h.Sum32() % 10 {
 	case 0, 1:
 		return "test"
-	case 2, 3:
+	case 2:
+		return "dev"
+	case 3, 4:
 		return "train"
 	default:
 		return ""
@@ -40,13 +43,7 @@ func Pool(s string) string {
 // allowed reports whether a pooled string may be used for a split.
 func allowed(s, split string) bool {
 	p := Pool(s)
-	if p == "" {
-		return true
-	}
-	if split == "train" {
-		return p == "train"
-	}
-	return p == "test"
+	return p == "" || p == split
 }
 
 // pickPooled chooses one of xs allowed for split.
@@ -91,7 +88,9 @@ var Fields = []*Field{
 			"Aadhar card no", "Customer Aadhaar", "Applicant Aadhaar No", "Aadhaar of applicant", "aadhaar_no", "aadhaarNumber", "aadhar_number", "uid_no", "AadhaarNo"}},
 	{Kind: "aadhaar_masked", Type: "", Weight: 2, Gen: func(r *rand.Rand, p *Person) string { return p.maskedAadhaar(r) },
 		Labels: []string{"Aadhaar Number", "Aadhaar No", "Aadhaar", "Aadhar No", "UID", "Masked Aadhaar", "Aadhaar (masked)", "aadhaar_no", "Aadhaar No (last 4)"}},
-	{Kind: "vid", Type: pii.VID, Weight: 1, Gen: func(r *rand.Rand, p *Person) string { return groupDigits(p.VID, pick(r, []string{" ", "", " ", "-"}), 4) },
+	{Kind: "vid", Type: pii.VID, Weight: 1, Gen: func(r *rand.Rand, p *Person) string {
+		return groupDigits(p.VID, pick(r, []string{" ", "", " ", "-"}), 4)
+	},
 		Labels: []string{"VID", "Virtual ID", "Aadhaar VID", "VID No", "virtual_id", "Virtual Identification Number"}},
 	{Kind: "pan", Type: pii.PAN, Weight: 6, Gen: func(r *rand.Rand, p *Person) string { return p.PAN },
 		Labels: []string{"PAN", "PAN No", "PAN No.", "PAN Number", "PAN Card No", "PAN Card Number", "Permanent Account Number", "PAN Card", "pan_no", "panNumber", "PAN of applicant", "Income Tax PAN", "PAN (10 char)", "PAN ID"}},
@@ -295,7 +294,9 @@ var Fields = []*Field{
 		}
 		return fmt.Sprintf("%s%02d%s%04d", rto, 1+r.Intn(60), letters(r, 2), r.Intn(10000))
 	}, Labels: []string{"Vehicle No", "Vehicle Number", "Registration No", "Regn No", "RC No", "vehicle_no", "Vehicle Reg No", "FASTag Vehicle No"}},
-	{Kind: "aadhaar_eid", Type: "", Weight: 1, Gen: func(r *rand.Rand, p *Person) string { return fmt.Sprintf("%04d/%05d/%05d", r.Intn(10000), r.Intn(100000), r.Intn(100000)) },
+	{Kind: "aadhaar_eid", Type: "", Weight: 1, Gen: func(r *rand.Rand, p *Person) string {
+		return fmt.Sprintf("%04d/%05d/%05d", r.Intn(10000), r.Intn(100000), r.Intn(100000))
+	},
 		Labels: []string{"Enrolment No", "Enrolment ID", "EID", "Aadhaar Enrolment No", "Enrollment Number", "enrolment_id"}},
 	{Kind: "generic_id", Type: "", Weight: 5, Gen: func(r *rand.Rand, p *Person) string {
 		switch r.Intn(4) {

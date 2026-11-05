@@ -6,4 +6,6 @@ import (
 	"github.com/techiek77-ui/poc1/pkg/pii/detect"
 )
 
-func analyzeFor(v *detect.DocView, c *pii.Candidate) *attrib.Analysis { return attrib.Analyze(v, c, 60) }
+func analyzeFor(v *detect.DocView, c *pii.Candidate) *attrib.Analysis {
+	return attrib.Analyze(v, c, 60)
+}

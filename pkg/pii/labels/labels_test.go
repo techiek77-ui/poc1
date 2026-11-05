@@ -70,3 +70,15 @@ func TestIdentifierForms(t *testing.T) {
 		}
 	}
 }
+
+func TestPhrasesUniqueAcrossKinds(t *testing.T) {
+	owner := map[string]Kind{}
+	for kind, phrases := range Phrases {
+		for _, p := range phrases {
+			if o, ok := owner[p]; ok && o != kind {
+				t.Errorf("phrase %q listed under both %s and %s", p, o, kind)
+			}
+			owner[p] = kind
+		}
+	}
+}

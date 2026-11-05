@@ -83,7 +83,6 @@ func Features(c *pii.Candidate, a *attrib.Analysis) []string {
 	addT := func(s string) { f = append(f, s, t+"&"+s) } // with a per-type conjunction
 
 	add("type=" + t)
-	add("fmt=" + string(a.Format))
 	addT("fmt=" + string(a.Format))
 	if c.KeywordHit {
 		addT("kw_hit")

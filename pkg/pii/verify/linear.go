@@ -36,7 +36,12 @@ type Model struct {
 // Score returns sigmoid(w.x + b).
 func (m *Model) Score(feats []string) float64 {
 	z := float64(m.Bias)
+	seen := make(map[string]struct{}, len(feats))
 	for _, f := range feats {
+		if _, dup := seen[f]; dup {
+			continue // training dedupes features per example; scoring must too
+		}
+		seen[f] = struct{}{}
 		z += float64(m.Weights[f])
 	}
 	return 1 / (1 + math.Exp(-z))
@@ -118,7 +123,7 @@ type TrainOptions struct {
 
 // DefaultTrainOptions are a reasonable starting point.
 func DefaultTrainOptions() TrainOptions {
-	return TrainOptions{Epochs: 8, LR: 0.1, L2: 1e-6, MinCount: 3, Seed: 1, PosW: 1}
+	return TrainOptions{Epochs: 8, LR: 0.1, L2: 1e-5, MinCount: 3, Seed: 1, PosW: 1}
 }
 
 // Train fits logistic regression with AdaGrad SGD.

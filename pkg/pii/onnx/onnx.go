@@ -105,6 +105,25 @@ func New(dir string) (*Verifier, error) {
 	if err := opts.SetIntraOpNumThreads(threads); err != nil {
 		return nil, err
 	}
+	// Optional accelerator. Everything works on the CPU provider; a GPU only
+	// changes speed. PII_ORT_EP=cuda needs the CUDA execution-provider library
+	// next to libonnxruntime (onnxruntime-linux-x64-gpu release) and CUDA/cuDNN;
+	// PII_ORT_EP=coreml uses Apple's CoreML on macOS.
+	switch os.Getenv("PII_ORT_EP") {
+	case "cuda":
+		co, err := ort.NewCUDAProviderOptions()
+		if err != nil {
+			return nil, fmt.Errorf("cuda provider: %w", err)
+		}
+		defer co.Destroy()
+		if err := opts.AppendExecutionProviderCUDA(co); err != nil {
+			return nil, fmt.Errorf("cuda provider: %w", err)
+		}
+	case "coreml":
+		if err := opts.AppendExecutionProviderCoreML(0); err != nil {
+			return nil, fmt.Errorf("coreml provider: %w", err)
+		}
+	}
 	sess, err := ort.NewDynamicAdvancedSession(filepath.Join(dir, m.ModelFile), inputs, []string{"logits"}, opts)
 	if err != nil {
 		return nil, fmt.Errorf("onnx session: %w", err)
@@ -142,7 +161,8 @@ func (v *Verifier) Encode(text string) ([]int64, []int64, []int64, error) {
 		return nil, nil, nil, err
 	}
 	n := len(en.Ids)
-	if n > v.M.MaxLen {
+	truncated := n > v.M.MaxLen
+	if truncated {
 		n = v.M.MaxLen
 	}
 	ids := make([]int64, n)
@@ -154,6 +174,9 @@ func (v *Verifier) Encode(text string) ([]int64, []int64, []int64, error) {
 		if i < len(en.TypeIds) {
 			types[i] = int64(en.TypeIds[i])
 		}
+	}
+	if truncated && n > 0 { // keep the final [SEP], as the training-side tokenizer truncation does
+		ids[n-1] = int64(en.Ids[len(en.Ids)-1])
 	}
 	return ids, mask, types, nil
 }

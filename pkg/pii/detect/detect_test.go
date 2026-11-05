@@ -1,6 +1,7 @@
 package detect
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/techiek77-ui/poc1/pkg/pii"
@@ -98,21 +99,21 @@ func TestCSVHeader(t *testing.T) {
 
 func TestOtherEntities(t *testing.T) {
 	cases := map[string]pii.EntityType{
-		"PAN: ABCPE1234F":                         pii.PAN,
-		"GSTIN 27AAPFU0939F1ZV":                   pii.GSTIN,
-		"card no 4111 1111 1111 1111":             pii.CreditCard,
-		"Voter ID ABC1234567":                     pii.VoterID,
-		"Passport No: A1234567":                   pii.Passport,
-		"IFSC: SBIN0001234":                       pii.IFSC,
-		"mobile +91 98765 43210":                  pii.Mobile,
-		"email ramesh.kumar@gmail.com":            pii.Email,
-		"UPI: ramesh@okaxis":                      pii.UPI,
-		"UAN 100123456789":                        pii.UAN,
-		"Pincode: 560038":                         pii.Pincode,
-		"DOB: 12/03/1990":                         pii.DOB,
-		"DL No: MH12 20110012345":                 pii.DrivingLicence,
-		"Name: Ramesh Kumar":                      pii.Name,
-		"Mr. Suresh Patil has applied":            pii.Name,
+		"PAN: ABCPE1234F":              pii.PAN,
+		"GSTIN 27AAPFU0939F1ZV":        pii.GSTIN,
+		"card no 4111 1111 1111 1111":  pii.CreditCard,
+		"Voter ID ABC1234567":          pii.VoterID,
+		"Passport No: A1234567":        pii.Passport,
+		"IFSC: SBIN0001234":            pii.IFSC,
+		"mobile +91 98765 43210":       pii.Mobile,
+		"email ramesh.kumar@gmail.com": pii.Email,
+		"UPI: ramesh@okaxis":           pii.UPI,
+		"UAN 100123456789":             pii.UAN,
+		"Pincode: 560038":              pii.Pincode,
+		"DOB: 12/03/1990":              pii.DOB,
+		"DL No: MH12 20110012345":      pii.DrivingLicence,
+		"Name: Ramesh Kumar":           pii.Name,
+		"Mr. Suresh Patil has applied": pii.Name,
 		"Address: 12, MG Road, Indiranagar, Bengaluru - 560038, Karnataka": pii.Address,
 	}
 	for text, want := range cases {
@@ -127,6 +128,36 @@ func TestNameNegatives(t *testing.T) {
 		for _, c := range run(t, text, pii.FormatText) {
 			if c.Type == pii.Name && (c.Value == "Not Available" || c.Value == "Thank You Team") {
 				t.Errorf("%q: stop words must not form a name: %+v", text, c)
+			}
+		}
+	}
+}
+
+func TestCSVQuotedNewline(t *testing.T) {
+	a := aadhaar("73819204561")
+	text := "code,name,aadhaar_no,notes\nE1,Zoya Khan," + a + ",\"line one\nold acc 509347182063\"\n"
+	l := ParseCSVLayout(text)
+	if len(l.Rows) != 2 {
+		t.Fatalf("rows = %d, want 2 (quoted newline must not split a row)", len(l.Rows))
+	}
+	col, hdr, ok := l.ColumnAt(strings.Index(text, "509347182063"))
+	if !ok || col != 3 || hdr != "notes" {
+		t.Fatalf("account in the quoted notes cell mapped to col %d (%q)", col, hdr)
+	}
+}
+
+func TestNoOverlappingDictionaryNames(t *testing.T) {
+	cs := run(t, "Guests: Ramesh Kumar Singh and Priya Sharma attended.", pii.FormatText)
+	var names []string
+	for _, c := range cs {
+		if c.Type == pii.Name {
+			names = append(names, c.Value)
+		}
+	}
+	for i := range names {
+		for j := range names {
+			if i != j && strings.Contains(names[i], names[j]) {
+				t.Fatalf("overlapping name candidates: %v", names)
 			}
 		}
 	}

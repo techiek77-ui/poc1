@@ -27,7 +27,7 @@ func main() {
 	retain := flag.Float64("retain", 0.99, "share of baseline true positives to keep when choosing thresholds")
 	epochs := flag.Int("epochs", 8, "training epochs")
 	lr := flag.Float64("lr", 0.1, "learning rate")
-	l2 := flag.Float64("l2", 1e-6, "L2 regularisation")
+	l2 := flag.Float64("l2", 1e-5, "L2 regularisation")
 	minCount := flag.Int("mincount", 3, "minimum feature count")
 	posw := flag.Float64("posw", 1.0, "weight of positive examples")
 	prune := flag.Float64("prune", 0.0, "drop weights with |w| below this after training (smaller artifact)")

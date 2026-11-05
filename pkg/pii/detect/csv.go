@@ -20,38 +20,39 @@ type Row struct {
 // Cell is one field.
 type Cell struct{ Start, End int }
 
-// ParseCSVLayout splits text into rows and cells, honouring double quotes.
+// ParseCSVLayout splits text into rows and cells, honouring double quotes,
+// including quoted fields that span lines.
 func ParseCSVLayout(text string) *CSVLayout {
 	l := &CSVLayout{Delim: detectDelim(text)}
-	pos := 0
-	for pos <= len(text) {
-		nl := strings.IndexByte(text[pos:], '\n')
-		lineEnd := len(text)
-		next := len(text) + 1
-		if nl >= 0 {
-			lineEnd = pos + nl
-			next = lineEnd + 1
-		}
-		row := Row{Start: pos, End: lineEnd}
-		cellStart := pos
-		inQuote := false
-		for i := pos; i < lineEnd; i++ {
-			c := text[i]
-			if c == '"' {
-				inQuote = !inQuote
-				continue
-			}
-			if c == l.Delim && !inQuote {
-				row.Cells = append(row.Cells, Cell{cellStart, i})
-				cellStart = i + 1
-			}
-		}
-		row.Cells = append(row.Cells, Cell{cellStart, lineEnd})
-		if lineEnd > pos { // skip empty lines
+	row := Row{Start: 0}
+	cellStart := 0
+	inQuote := false
+	endRow := func(end, next int) {
+		row.Cells = append(row.Cells, Cell{cellStart, end})
+		row.End = end
+		if end > row.Start {
 			l.Rows = append(l.Rows, row)
 		}
-		pos = next
+		row = Row{Start: next}
+		cellStart = next
 	}
+	for i := 0; i < len(text); i++ {
+		c := text[i]
+		switch {
+		case c == '"':
+			inQuote = !inQuote
+		case c == l.Delim && !inQuote:
+			row.Cells = append(row.Cells, Cell{cellStart, i})
+			cellStart = i + 1
+		case c == '\n' && !inQuote:
+			end := i
+			if end > row.Start && text[end-1] == '\r' {
+				end--
+			}
+			endRow(end, i+1)
+		}
+	}
+	endRow(len(text), len(text)+1)
 	if len(l.Rows) > 0 {
 		for _, c := range l.Rows[0].Cells {
 			l.Header = append(l.Header, strings.Trim(strings.TrimSpace(text[c.Start:c.End]), `"`))

@@ -111,8 +111,8 @@ type NameInfo struct {
 }
 
 var (
-	valueRe  = regexp.MustCompile(`\d(?:[\d \-/]{2,}\d)?|\b[A-Z0-9]*\d[A-Z0-9]*\b|\S+@\S+`)
-	insertRe = regexp.MustCompile(`(?is)insert\s+into\s+[\w."` + "`" + `\[\]]+\s*\(([^)]*)\)\s*values\s*\(`)
+	valueRe   = regexp.MustCompile(`\d(?:[\d \-/]{2,}\d)?|\b[A-Z0-9]*\d[A-Z0-9]*\b|\S+@\S+`)
+	insertRe  = regexp.MustCompile(`(?is)insert\s+into\s+[\w."` + "`" + `\[\]]+\s*\(([^)]*)\)\s*values\s*\(`)
 	testWords = map[string]bool{"test": true, "tests": true, "testing": true, "sample": true, "dummy": true, "example": true,
 		"fixture": true, "fixtures": true, "mock": true, "fake": true, "demo": true, "placeholder": true, "xxxx": true,
 		"tmp": true, "temp": true, "staging": true, "sandbox": true, "lorem": true, "foo": true, "bar": true}
@@ -150,7 +150,7 @@ func Analyze(v *detect.DocView, c *pii.Candidate, window int) *Analysis {
 	for _, loc := range valueRe.FindAllStringIndex(text[from:to], -1) {
 		s, e := loc[0]+from, loc[1]+from
 		if e <= c.Start || s >= c.End {
-			if e-s >= 4 || strings.ContainsAny(text[s:e], "@") {
+			if isValueLike(text[s:e]) {
 				values = append(values, [2]int{s, e})
 			}
 		}
@@ -260,6 +260,28 @@ func Analyze(v *detect.DocView, c *pii.Candidate, window int) *Analysis {
 		a.NameInfo = nameInfo(text, c)
 	}
 	return a
+}
+
+// isValueLike decides whether a span between a label and a candidate counts
+// as another value. Short pure-digit runs (years, counts, "12 digit", error
+// codes) are not: they would otherwise break attribution.
+func isValueLike(s string) bool {
+	if strings.ContainsAny(s, "@") {
+		return true
+	}
+	digits, letters := 0, 0
+	for i := 0; i < len(s); i++ {
+		switch {
+		case s[i] >= '0' && s[i] <= '9':
+			digits++
+		case s[i] >= 'A' && s[i] <= 'Z' || s[i] >= 'a' && s[i] <= 'z':
+			letters++
+		}
+	}
+	if letters > 0 {
+		return digits >= 2 && len(s) >= 5 // alphanumeric identifiers
+	}
+	return digits >= 6 // numeric values; 4-5 digit years/codes/counts are not
 }
 
 func textKind(k labels.Kind) bool {

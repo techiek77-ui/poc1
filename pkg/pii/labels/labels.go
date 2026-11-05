@@ -131,7 +131,7 @@ var Phrases = map[Kind][]string{
 		"calling number", "caller", "call", "sms to", "otp sent to",
 	},
 	KEmail: {"email address", "email id", "emailid", "e mail id", "e mail", "email", "mail id", "mailid", "mail"},
-	KUPI: {"upi id", "upiid", "upi handle", "upi address", "upi", "vpa", "virtual payment address", "payment address"},
+	KUPI:   {"upi id", "upiid", "upi handle", "upi address", "upi", "vpa", "virtual payment address", "payment address"},
 	KBankAccount: {
 		"bank account number", "bank account no", "bank account num", "bank account", "bankaccount",
 		"bank acc number", "bank acc no", "bank acc", "bank acct no", "bank acct", "bank a c no", "bank a c",
@@ -153,7 +153,7 @@ var Phrases = map[Kind][]string{
 		"pf ac", "pf", "provident fund", "provident fund number", "provident fund account",
 	},
 	KPincode: {"pin code", "pincode", "postal code", "postcode", "post code", "zip code", "zipcode", "zip", "pin"},
-	KDOB: {"date of birth", "dob", "d o b", "birth date", "birthdate", "born on", "born", "dateofbirth"},
+	KDOB:     {"date of birth", "dob", "d o b", "birth date", "birthdate", "born on", "born", "dateofbirth"},
 	KName: {
 		"full name", "customer name", "applicant name", "account holder name", "holder name", "cardholder name",
 		"card holder name", "beneficiary name", "nominee name", "employee name", "father name", "father s name",
@@ -217,7 +217,7 @@ var Phrases = map[Kind][]string{
 		"profile id", "person id", "party id", "lead id", "contact id", "student id", "roll no", "roll number",
 		"enrollment no", "registration number", "registration no", "regn no", "reg no", "application number",
 		"application no", "application id", "app id", "appid", "ack no", "acknowledgement number",
-		"acknowledgement no", "arn no",
+		"acknowledgement no",
 	},
 	KPolicy: {
 		"policy number", "policy no", "policy num", "policyno", "policy id", "policy", "proposal number",
@@ -267,7 +267,7 @@ var Phrases = map[Kind][]string{
 		"amount", "amt", "rs", "inr", "rupees", "balance", "total", "total amount", "net amount",
 		"gross amount", "price", "fee", "charges", "charge", "credit", "debit", "payable", "paid", "due",
 		"outstanding", "emi", "premium", "principal", "interest", "salary", "ctc", "mrp", "discount", "tax",
-		"gst amount", "cgst", "sgst", "igst", "tds", "value",
+		"gst amount", "cgst", "sgst", "igst", "tds",
 	},
 	KCheque: {
 		"cheque number", "cheque no", "cheque num", "cheque", "chq no", "chq", "check no", "check number",

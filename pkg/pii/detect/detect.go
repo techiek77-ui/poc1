@@ -7,6 +7,7 @@ package detect
 
 import (
 	"regexp"
+	"sort"
 	"strings"
 
 	"github.com/techiek77-ui/poc1/pkg/pii"
@@ -37,11 +38,17 @@ type Spec struct {
 // close to what public DLP tools use for Indian identifiers.
 var Specs = []Spec{
 	{Type: pii.Aadhaar, Kind: labels.KAadhaar, Numeric: true,
-		Re:       regexp.MustCompile(`\b\d{4}[ -]?\d{4}[ -]?\d{4}\b`),
-		Validate: func(m string) bool { d := checksum.Digits(m); return len(d) == 12 && d[0] >= '2' && checksum.Verhoeff(d) && consistentSeparators(m) }},
+		Re: regexp.MustCompile(`\b\d{4}[ -]?\d{4}[ -]?\d{4}\b`),
+		Validate: func(m string) bool {
+			d := checksum.Digits(m)
+			return len(d) == 12 && d[0] >= '2' && checksum.Verhoeff(d) && consistentSeparators(m)
+		}},
 	{Type: pii.VID, Kind: labels.KVID, Numeric: true,
-		Re:       regexp.MustCompile(`\b\d{4}[ -]?\d{4}[ -]?\d{4}[ -]?\d{4}\b`),
-		Validate: func(m string) bool { d := checksum.Digits(m); return len(d) == 16 && d[0] >= '2' && checksum.Verhoeff(d) && consistentSeparators(m) }},
+		Re: regexp.MustCompile(`\b\d{4}[ -]?\d{4}[ -]?\d{4}[ -]?\d{4}\b`),
+		Validate: func(m string) bool {
+			d := checksum.Digits(m)
+			return len(d) == 16 && d[0] >= '2' && checksum.Verhoeff(d) && consistentSeparators(m)
+		}},
 	{Type: pii.PAN, Kind: labels.KPAN,
 		Re:       regexp.MustCompile(`\b[A-Z]{3}[ABCFGHLJPT][A-Z]\d{4}[A-Z]\b`),
 		Validate: func(m string) bool { return true }},
@@ -49,8 +56,11 @@ var Specs = []Spec{
 		Re:       regexp.MustCompile(`\b\d{2}[A-Z]{3}[ABCFGHLJPT][A-Z]\d{4}[A-Z][1-9A-Z]Z[0-9A-Z]\b`),
 		Validate: func(m string) bool { return checksum.GSTIN(m) && stateCodeOK(m[:2]) }},
 	{Type: pii.CreditCard, Kind: labels.KCreditCard, Numeric: true,
-		Re:       regexp.MustCompile(`\b\d(?:[ -]?\d){12,18}\b`),
-		Validate: func(m string) bool { d := checksum.Digits(m); return len(d) >= 13 && len(d) <= 19 && checksum.Luhn(d) && cardBIN(d) && consistentSeparators(m) }},
+		Re: regexp.MustCompile(`\b\d(?:[ -]?\d){12,18}\b`),
+		Validate: func(m string) bool {
+			d := checksum.Digits(m)
+			return len(d) >= 13 && len(d) <= 19 && checksum.Luhn(d) && cardBIN(d) && consistentSeparators(m)
+		}},
 	{Type: pii.VoterID, Kind: labels.KVoterID,
 		Re:       regexp.MustCompile(`\b[A-Z]{3}\d{7}\b`),
 		Validate: func(m string) bool { return true }},
@@ -64,8 +74,11 @@ var Specs = []Spec{
 		Re:       regexp.MustCompile(`\b[A-Z]{4}0[A-Z0-9]{6}\b`),
 		Validate: func(m string) bool { return true }},
 	{Type: pii.Mobile, Kind: labels.KMobile, Numeric: true,
-		Re:       regexp.MustCompile(`(?:\+91[ -]?|\b91[ -]?|\b0)?[6-9]\d{4}[ -]?\d{5}\b`),
-		Validate: func(m string) bool { d := checksum.Digits(m); return len(d) == 10 || (len(d) == 11 && d[0] == '0') || (len(d) == 12 && strings.HasPrefix(d, "91")) }},
+		Re: regexp.MustCompile(`(?:\+91[ -]?|\b91[ -]?|\b0)?[6-9]\d{4}[ -]?\d{5}\b`),
+		Validate: func(m string) bool {
+			d := checksum.Digits(m)
+			return len(d) == 10 || (len(d) == 11 && d[0] == '0') || (len(d) == 12 && strings.HasPrefix(d, "91"))
+		}},
 	{Type: pii.Email, Kind: labels.KEmail,
 		Re:       regexp.MustCompile(`\b[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}\b`),
 		Validate: func(m string) bool { return true }},
@@ -171,14 +184,22 @@ func NewDocView(doc *pii.Doc) *DocView {
 
 // LabelsIn returns label hits overlapping [from,to).
 func (v *DocView) LabelsIn(from, to int) []labels.Hit {
+	// Labels are sorted by Start and no phrase is longer than maxPhraseLen
+	// bytes, so the first hit that can overlap [from,to) starts at or after
+	// from-maxPhraseLen; binary search there instead of scanning the document.
+	i := sort.Search(len(v.Labels), func(i int) bool { return v.Labels[i].Start >= from-maxPhraseLen })
 	var out []labels.Hit
-	for _, h := range v.Labels {
-		if h.End > from && h.Start < to {
+	for ; i < len(v.Labels) && v.Labels[i].Start < to; i++ {
+		if h := v.Labels[i]; h.End > from {
 			out = append(out, h)
 		}
 	}
 	return out
 }
+
+// maxPhraseLen bounds the byte length of a label phrase as it appears in
+// text (the longest catalogue phrase is ~40 bytes; allow for spacing).
+const maxPhraseLen = 64
 
 // Detect returns the baseline candidates for a document. With
 // RequireKeyword=false it returns every validated regex match and sets
@@ -255,10 +276,11 @@ func isDigit(b byte) bool { return b >= '0' && b <= '9' }
 // number written with single separators ("9000 0000 0002 1234" contains an
 // Aadhaar-shaped prefix).
 func embeddedInDigitRun(text string, st, en int) bool {
-	if st >= 2 && isDigit(text[st-2]) && (text[st-1] == ' ' || text[st-1] == '-') {
+	sep := func(b byte) bool { return b == ' ' || b == '-' || b == '/' }
+	if st >= 2 && isDigit(text[st-2]) && sep(text[st-1]) {
 		return true
 	}
-	if en+1 < len(text) && (text[en] == ' ' || text[en] == '-') && isDigit(text[en+1]) {
+	if en+1 < len(text) && sep(text[en]) && isDigit(text[en+1]) {
 		return true
 	}
 	return false
