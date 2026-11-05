@@ -87,8 +87,9 @@ PII_ORT_LIB=/path/to/libonnxruntime.so go run -tags onnx ./cmd/piibench -onnx mo
 intra-op thread; `PII_ORT_THREADS` raises the thread count on servers. `scripts/run_all.sh`
 reproduces everything in one go.
 
-The Go runtime needs the ONNX Runtime shared library (≈27 MB on Linux x64, from the
-official GitHub releases) plus `model.int8.onnx`, `tokenizer.json` and
+The Go runtime needs the ONNX Runtime shared library (28 MB for 1.31.1 on Linux x64, from the
+official GitHub releases; the `onnxruntime_go` v1.38 binding needs ONNX Runtime ≥ 1.31 — with 1.29 it fails with
+"requested API version [31] is not available") plus `model.int8.onnx`, `tokenizer.json` and
 `manifest.json`; the model is data, not code, so a retrained model is a file push.
 
 ## Model lifecycle
