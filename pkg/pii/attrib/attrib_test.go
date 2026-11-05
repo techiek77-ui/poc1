@@ -2,6 +2,7 @@ package attrib
 
 import (
 	"testing"
+	"unicode/utf8"
 
 	"github.com/techiek77-ui/poc1/pkg/pii"
 	"github.com/techiek77-ui/poc1/pkg/pii/detect"
@@ -98,5 +99,14 @@ func TestShape(t *testing.T) {
 	}
 	if g := shapeOf("7381 9204 5614", "738192045614").Groups; g != "4-4-4" {
 		t.Fatalf("groups = %q", g)
+	}
+}
+
+func TestWindowNeverSplitsUTF8(t *testing.T) {
+	// 61 bytes of Devanagari before the value: a byte window would cut a rune.
+	text := "मेरा आधार मेरी पहचान मेरा आधार मेरी पहचान मेरा Aadhaar: 738192045614 ₹₹₹₹₹₹₹₹₹₹₹₹₹₹₹₹₹₹₹₹₹₹₹₹₹₹₹₹₹₹₹₹"
+	a := analyze(t, text, pii.FormatText, pii.Aadhaar, "738192045614")
+	if !utf8.ValidString(a.Left) || !utf8.ValidString(a.Right) {
+		t.Fatalf("window boundaries split a character: left=%q right=%q", a.Left, a.Right)
 	}
 }

@@ -33,6 +33,7 @@ func Build(c *pii.Candidate, a *attrib.Analysis) string {
 }
 
 func collapse(s string) string {
+	s = strings.ToValidUTF8(s, "") // a tokenizer must never see a half character
 	s = strings.ReplaceAll(s, "\n", " ⏎ ")
 	s = strings.ReplaceAll(s, "\r", "")
 	s = strings.ReplaceAll(s, "\t", " ")

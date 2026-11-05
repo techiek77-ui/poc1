@@ -154,8 +154,15 @@ func (v *Verifier) Threshold(t pii.EntityType) float64 {
 	return v.M.DefaultThreshold
 }
 
-// Encode tokenizes the model input for a candidate (exposed for tests).
-func (v *Verifier) Encode(text string) ([]int64, []int64, []int64, error) {
+// Encode tokenizes the model input for a candidate (exposed for tests). A
+// verifier must never take the scanner down, so a tokenizer panic is turned
+// into an error (the caller then falls back to a neutral score).
+func (v *Verifier) Encode(text string) (ids, mask, types []int64, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			ids, mask, types, err = nil, nil, nil, fmt.Errorf("tokenizer panic: %v", r)
+		}
+	}()
 	en, err := v.tk.EncodeSingle(text, true)
 	if err != nil {
 		return nil, nil, nil, err
@@ -165,9 +172,9 @@ func (v *Verifier) Encode(text string) ([]int64, []int64, []int64, error) {
 	if truncated {
 		n = v.M.MaxLen
 	}
-	ids := make([]int64, n)
-	mask := make([]int64, n)
-	types := make([]int64, n)
+	ids = make([]int64, n)
+	mask = make([]int64, n)
+	types = make([]int64, n)
 	for i := 0; i < n; i++ {
 		ids[i] = int64(en.Ids[i])
 		mask[i] = 1

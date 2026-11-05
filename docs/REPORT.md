@@ -4,7 +4,7 @@
 
 **Question.** Can an ML model cut the false positives this pipeline produces, without losing true positives?
 
-**Answer.** Yes, and it should be added as a *verifier* behind the existing detector rather than as a replacement for it. On this POC's held-out data the verifier removes **97–98 % of false positives while keeping 99.6 % of true positives** (precision 87.7 % → 99.7 %); on a hand-written set of 48 documents in styles it was never trained on it removes **94 %** of false positives at 98.6 % retention, and a rules-only version of the same idea removes 86 % at 100 % retention. It costs about 70 µs per candidate in pure Go, runs on endpoints, and ships as a data file that you can retrain and push independently of the binary. The numbers come from synthetic data and must be re-validated on real scans (section 9); the design is what carries over.
+**Answer.** Yes, and it should be added as a *verifier* behind the existing detector rather than as a replacement for it. On this POC's held-out data the verifier removes **97.9 % of false positives while keeping 99.6 % of true positives** (precision 87.2 % → 99.7 %); on a hand-written set of 48 documents in styles it was never trained on it removes **94 %** of false positives at **100 %** retention, and a rules-only version of the same idea removes 88 % at 100 % retention. It costs about 70 µs per candidate in pure Go, runs on endpoints, and ships as a data file that you can retrain and push independently of the binary. The numbers come from synthetic data and must be re-validated on real scans (section 9); the design is what carries over.
 
 Measured tables: [`RESULTS.md`](RESULTS.md). Code map and how to run: [`../README.md`](../README.md).
 
@@ -67,7 +67,7 @@ file ──► regex + checksum ──► candidates ──► context analysis 
 | Tier A: features, pure-Go training, inference, explanations, versioned artifact | done |
 | Evaluation harness (TP retention, FP reduction, per type/shape/category, sweep, gate experiment, latency) | done |
 | Golden set (48 hand-written documents) | done |
-| Tier B: Go runtime (ONNX Runtime + HF tokenizer), Python training/export/quantisation, Go/Python parity test, latency benchmark | runtime done and verified; model trained from scratch only (no pretrained weights reachable) |
+| Tier B: Go runtime (ONNX Runtime + HF tokenizer), Python training/export/quantisation, Go/Python parity test, latency benchmark | runtime done and verified; model trained from scratch only (no pretrained weights reachable) — a floor, not a result: 35 % FP reduction at 95.8 % retention (section 5.1) |
 
 ### 4.1 The synthetic corpus, and why it is adversarial
 
@@ -79,20 +79,23 @@ A detection is a (span, claimed type). It is a true positive if a labelled span 
 
 ## 5. Results
 
-Numbers below are from the final run in [`RESULTS.md`](RESULTS.md) (6 000 test documents, 30 271 baseline detections).
+Numbers below are from the final run in [`RESULTS.md`](RESULTS.md) (6 000 test documents, 29 561 baseline detections).
 
 ### 5.1 Held-out synthetic test split
 
 | configuration | TP | FP | precision | TP retention | FP reduction |
 |---|---:|---:|---:|---:|---:|
-| 0 baseline (regex + checksum + keyword ≤ 60 chars) | 26 544 | 3 727 | 87.7 % | 100 % | – |
-| 1 rules @0.5 | 25 917 | 1 077 | 96.0 % | 97.6 % | 71.1 % |
-| 1 rules @99 % retention | 26 485 | 1 423 | 94.9 % | 99.8 % | 61.8 % |
-| **A linear (pure Go)** | **26 430** | **92** | **99.7 %** | **99.6 %** | **97.5 %** |
+| 0 baseline (regex + checksum + keyword ≤ 60 chars) | 25 788 | 3 773 | 87.2 % | 100 % | – |
+| 1 rules @0.5 | 25 060 | 1 063 | 95.9 % | 97.2 % | 71.8 % |
+| 1 rules @99 % retention | 25 721 | 1 418 | 94.8 % | 99.7 % | 62.4 % |
+| **A linear (pure Go)** | **25 685** | **79** | **99.7 %** | **99.6 %** | **97.9 %** |
+| B onnx (BERT-tiny trained from scratch, no pretraining) | 24 695 | 2 444 | 91.0 % | 95.8 % | 35.2 % |
 
-FP reduction at other retention targets (thresholds from dev, measured on test): linear 93.1 % at 99.9 % retention, 96.5 % at 99.5 %, 97.5 % at 99.0 %; rules 47.7 % / 61.5 % / 61.8 %.
+FP reduction at other retention targets (thresholds from dev, measured on test): linear 94.4 % at 99.9 % retention, 97.2 % at 99.5 %, 97.9 % at 99.0 %; rules 7.6 % / 61.4 % / 62.4 % (the rules' scores are coarse, so a 99.9 % target leaves almost no room).
 
-By data shape the linear verifier removes 95–99 % of false positives everywhere except code fixtures (dummy numbers labelled as Aadhaar remain the largest residual category). By entity type the biggest absolute wins are BANK_ACCOUNT (the 12-digit collisions), AADHAAR, UAN and PINCODE; the full per-type table is in `RESULTS.md`.
+By data shape the linear verifier removes 93–100 % of false positives (966 → 33 in CSV, 909 → 4 in forms, 778 → 12 in prose, 272 → 4 in OCR, 177 → 12 in code, where dummy numbers labelled as Aadhaar are the largest residual category). By entity type the biggest absolute wins are BANK_ACCOUNT (1 412 → 8: the 12-digit collisions), AADHAAR (719 → 45), NAME (440 → 5), ADDRESS (399 → 8), UAN (343 → 1) and PINCODE (339 → 9); the full per-type table is in `RESULTS.md`.
+
+The from-scratch Tier B row is there for honesty, not as a recommendation: a 5.4 M-parameter BERT trained for two epochs on 120 k synthetic windows learns the task only partially (21 % FP reduction at 99.3 % retention in its own evaluation; with the shared 0.5 threshold cap, 35 % at 95.8 %). It proves the pipeline — export, quantisation, Go tokenisation parity, latency — not the model class. The published evidence (GitHub's ModernBERT verifier) is for *pretrained* encoders, which this environment could not download.
 
 ### 5.2 Golden set — 48 documents in styles the generator does not produce
 
@@ -101,14 +104,14 @@ Bank SMS, UPI notifications, WhatsApp-style chat, an HR email, logs where `uid` 
 | configuration | TP | FP | precision | TP retention | FP reduction |
 |---|---:|---:|---:|---:|---:|
 | 0 baseline | 147 | 52 | 73.9 % | 100 % | – |
-| 1 rules @0.5 | 147 | 7 | 95.5 % | **100 %** | 86.5 % |
-| A linear | 145 | 3 | 98.0 % | 98.6 % | **94.2 %** |
+| 1 rules @0.5 | 147 | 6 | 96.1 % | **100 %** | 88.5 % |
+| A linear | 147 | 3 | 98.0 % | **100 %** | **94.2 %** |
 
-Every remaining error is listed in `RESULTS.md`. The two true positives the linear model drops are an Aadhaar in a SQL `INSERT` (score 0.29 — structured-column mapping is new to the model) and a mobile written `919876543216` with no label of its own; the remaining false positives are test-fixture dummies (`TEST_PAN`, `TEST_ACCOUNT`) and `9999999999` with a `mobile` label. The rules keep every true positive on this set and are wrong only where the text is genuinely ambiguous (`number` as a column header; `uid=` in a login log).
+Every remaining error is listed in `RESULTS.md`. Both verifiers keep every true positive on this set. The linear model's three remaining false positives are all test-fixture dummies (`TEST_PAN = "ABCPE1234F"`, `TEST_ACCOUNT = "234567890124"`, `TEST_MOBILE = "9999999999"`). The rules are wrong in six places, all genuinely ambiguous or a rule being too generous: `number` as a column header, `uid=` in a login log, a second Aadhaar after `and` with no label of its own, and three cases where the "(Aadhaar)" right-attachment rescue fired on a parenthetical sentence (`AWB 5283… (carry Aadhaar for open-box delivery)`) — the model is right in all six.
 
 ### 5.3 What the ML adds beyond rules
 
-The rules get ~62–71 % of the false positives on synthetic data and 86 % on the golden set because attribution plus competing labels *is* most of the problem. The model adds the cases rules cannot express: generic or missing headers combined with other evidence (`id_number` next to an `acct` column), the long tail of context words (`login`, `password`, `test`, `ref` two tokens away), interactions between shape and claim (12 contiguous digits claimed as a bank account next to an Aadhaar label), and calibrated confidence that lets you trade retention for reduction per entity type (the sweep). The model is also where real-world feedback can go; rules only grow by hand.
+The rules get ~62–72 % of the false positives on synthetic data and 88 % on the golden set because attribution plus competing labels *is* most of the problem. The model adds the cases rules cannot express: generic or missing headers combined with other evidence (`id_number` next to an `acct` column), the long tail of context words (`login`, `password`, `test`, `ref` two tokens away), interactions between shape and claim (12 contiguous digits claimed as a bank account next to an Aadhaar label), and calibrated confidence that lets you trade retention for reduction per entity type (the sweep). The model is also where real-world feedback can go; rules only grow by hand.
 
 Where the model is weaker than rules: under distribution shift it is over-confident (the first golden run dropped 7 % of true positives because thresholds learned on synthetic data sat at 0.99; capping thresholds at 0.5 fixed it) and it has no notion it has not seen (SQL columns before the attribution step learned them). Run both: rules as the floor, model on top, and log disagreements.
 
@@ -116,23 +119,23 @@ Where the model is weaker than rules: under distribution shift it is over-confid
 
 1. **Attribution alone fixes the brief's example** — the nearest label on the left with no value in between, plus "a label followed by its own value does not also label the previous value". This is a 200-line change to the existing gate.
 2. **Competing-label suppression needs a catalogue of the *other* identifiers.** The product knows what Aadhaar keywords look like; it also needs to know what `UTR`, `RRN`, `AWB`, `PPO`, `PRAN`, `APAAR`, `CIF`, `consumer no`, `IMEI` look like. That list is in `pkg/pii/labels` and is the single most reusable artifact of this POC.
-3. **The keyword gate costs recall.** 17 % of labelled PII in the synthetic test set is never proposed because no keyword is within 60 characters (identity-card text, bare table cells, headerless exports). Replacing the gate with the model's score (score every regex + checksum match) raised recall from 83.0 % to 95.1 % at a precision *better* than today's baseline (93.1 % vs 87.7 %) — see "Keyword gate vs. model gate" in `RESULTS.md`. On the golden set: 94.0 % → 96.7 %. That is a product decision (it changes what gets reported), but it is the single largest recall lever available.
+3. **The keyword gate costs recall.** 17 % of labelled PII in the synthetic test set is never proposed because no keyword is within 60 characters (identity-card text, bare table cells, headerless exports). Replacing the gate with the model's score (score every regex + checksum match) raised recall from 82.9 % to 95.0 % at a precision *better* than today's baseline (93.5 % vs 87.2 %) — see "Keyword gate vs. model gate" in `RESULTS.md`. On the golden set: 94.0 % → 98.0 % (it recovers the identity-card names and the header-less CSV's Aadhaar and IFSC values). That is a product decision (it changes what gets reported), but it is the single largest recall lever available.
 
 Two smaller ones: Aadhaar numbers never start with 0 or 1, which already excludes UAN (1…) and PRAN (11…) shapes; and `uid` should be a weak keyword — in logs it means user id.
 
 ## 7. Deployment in Go
 
-**Tier A (pure Go, no CGO).** `models/tier_a_lr.json` is a 6 MB JSON artifact (weights, per-entity thresholds, manifest); it loads in well under a second and needs ~25 MB of heap. The size is the feature *strings*, not the weights: hashing features to 32-bit indices and writing a binary weight table would bring it to about 1 MB with no accuracy change if endpoint size matters. Per candidate on this container (Xeon 2.1 GHz, one goroutine): context analysis 25 µs, rules 0.6 µs, linear model 41 µs including the explanation string. At 1 000 candidates per second per core it is irrelevant next to file I/O and regex scanning. Suitable for endpoint agents as-is.
+**Tier A (pure Go, no CGO).** `models/tier_a_lr.json` is a 6 MB JSON artifact (weights, per-entity thresholds, manifest); it loads in well under a second and needs ~25 MB of heap. The size is the feature *strings*, not the weights: hashing features to 32-bit indices and writing a binary weight table would bring it to about 1 MB with no accuracy change if endpoint size matters. Per candidate on this container (Xeon 2.1 GHz, one goroutine): context analysis 25 µs, rules 0.5 µs, linear model 42 µs including the explanation string. At 1 000 candidates per second per core it is irrelevant next to file I/O and regex scanning. Suitable for endpoint agents as-is.
 
 **Tier B (ONNX Runtime).** Ships as the ONNX Runtime shared library (`libonnxruntime.so` 28 MB for 1.31.1 Linux x64; `onnxruntime.dll` on Windows; the Go binding loads it at runtime; the binding needs CGO on every platform (MinGW on Windows); binding and runtime versions must be paired — `onnxruntime_go` v1.38 needs ONNX Runtime ≥ 1.31), an int8 `.onnx` model, `tokenizer.json` and `manifest.json`. GPU servers would add the CUDA execution provider; CPU needs nothing else. Measured from Go on this container with a single intra-op thread, int8, mean input 55 tokens:
 
 | model shape | parameters | int8 file | per candidate (Go, 1 thread) |
 |---|---:|---:|---:|
-| tiny (4 layers × 256) — the from-scratch model | 5.4 M | ~6 MB | see `RESULTS.md` |
-| MiniLM-L6 shape (6 × 384) | ~14 M with 8 k vocab (22 M with a 30 k vocab) | 14 MB | ~10 ms mean while sharing the CPU with training; re-measured in `RESULTS.md` |
-| BERT-base shape (12 × 768) | ~86 M | 92 MB | ~47 ms |
+| tiny (4 layers × 256) — the from-scratch model | 5.4 M | 5.6 MB | 2.4 ms mean, p95 3.5 ms (2.3 ms inside the harness) |
+| MiniLM-L6 shape (6 × 384) | ~14 M with an 8 k vocab (22 M with a 30 k vocab) | 14 MB | 5.8 ms mean, p95 8.4 ms |
+| BERT-base shape (12 × 768) | ~86 M | 92 MB | 28.6 ms mean, p95 43 ms |
 
-For endpoints the question is candidates per minute: at 10 ms per candidate, 1 000 candidates per minute costs 17 % of one core. Post-regex candidates are rare relative to text volume, so a MiniLM-sized model is viable on endpoints if candidate rates are modest, and comfortably so on servers; BERT-base is a server-only option. Tier A everywhere plus Tier B on servers is the configuration to start with.
+For endpoints the question is candidates per minute: at 6 ms per candidate, 1 000 candidates per minute costs 10 % of one core. Post-regex candidates are rare relative to text volume, so a MiniLM-sized model is viable on endpoints if candidate rates are modest, and comfortably so on servers; BERT-base is a server-only option. Tier A everywhere plus Tier B on servers is the configuration to start with.
 
 ## 8. Model lifecycle: retraining and shipping upgrades
 

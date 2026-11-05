@@ -9,6 +9,7 @@ package attrib
 import (
 	"regexp"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/techiek77-ui/poc1/pkg/pii"
 	"github.com/techiek77-ui/poc1/pkg/pii/checksum"
@@ -124,6 +125,13 @@ var (
 func Analyze(v *detect.DocView, c *pii.Candidate, window int) *Analysis {
 	text := v.Doc.Text
 	from, to := max(0, c.Start-window), min(len(text), c.End+window)
+	// The window is measured in bytes; never cut a multi-byte character in half.
+	for from < c.Start && !utf8.RuneStart(text[from]) {
+		from++
+	}
+	for to < len(text) && !utf8.RuneStart(text[to]) {
+		to++
+	}
 	a := &Analysis{Window: window, Left: text[from:c.Start], Right: text[c.End:to], Format: v.Doc.Format}
 	kind := labels.TypeKind[c.Type]
 	textClaim := c.Type == pii.Name || c.Type == pii.Address
