@@ -94,7 +94,25 @@ func LoadDecisions(path string) ([]pii.Doc, error) {
 		if r.Start < 0 || r.End > len(r.Text) || r.End <= r.Start {
 			return nil, fmt.Errorf("%s line %d: bad span [%d,%d)", path, n, r.Start, r.End)
 		}
-		typ := pii.EntityType(strings.ToUpper(r.Type))
+		if r.Value != "" && r.Text[r.Start:r.End] != r.Value {
+			return nil, fmt.Errorf("%s line %d: span [%d,%d) is %q, not value %q", path, n, r.Start, r.End, r.Text[r.Start:r.End], r.Value)
+		}
+		typ := pii.EntityType(strings.ToUpper(strings.TrimSpace(r.Type)))
+		if !KnownType(typ) {
+			return nil, fmt.Errorf("%s line %d: unknown entity type %q (known: %v)", path, n, r.Type, pii.AllTypes)
+		}
+		r.Format = pii.Format(strings.ToLower(string(r.Format)))
+		switch r.Format {
+		case "", pii.FormatText, pii.FormatCSV, pii.FormatJSON, pii.FormatLog:
+		default:
+			return nil, fmt.Errorf("%s line %d: unknown format %q", path, n, r.Format)
+		}
+		r.Split = strings.ToLower(r.Split)
+		switch r.Split {
+		case "", "train", "dev", "test":
+		default:
+			return nil, fmt.Errorf("%s line %d: unknown split %q", path, n, r.Split)
+		}
 		span := pii.TruthSpan{Start: r.Start, End: r.End, Claim: typ}
 		switch strings.ToLower(r.Decision) {
 		case "tp", "true", "confirmed", "yes":
@@ -165,29 +183,50 @@ func LoadAll(paths []string) ([]pii.Doc, error) {
 	return all, nil
 }
 
+// KnownType reports whether t is one of the detector's entity types.
+func KnownType(t pii.EntityType) bool {
+	for _, k := range pii.AllTypes {
+		if k == t {
+			return true
+		}
+	}
+	return false
+}
+
 // AssignSplits gives a split to documents that have none (real data). mode is
-// "train", "dev", "test" (everything goes there) or "hash" (80/10/10 by id).
-func AssignSplits(docs []pii.Doc, mode string) {
+// "train", "dev", "test" (everything goes there) or "hash" (80/10/10). The hash
+// is over the snippet text for partially labelled documents, so several
+// decisions about one snippet always land in the same split.
+func AssignSplits(docs []pii.Doc, mode string) error {
+	switch mode {
+	case "train", "dev", "test", "hash":
+	default:
+		return fmt.Errorf("unknown split mode %q (train|dev|test|hash)", mode)
+	}
 	for i := range docs {
 		if docs[i].Split != "" && docs[i].Split != "golden" {
 			continue
 		}
-		switch mode {
-		case "hash":
-			h := fnv.New32a()
-			h.Write([]byte(docs[i].ID))
-			switch h.Sum32() % 10 {
-			case 8:
-				docs[i].Split = "dev"
-			case 9:
-				docs[i].Split = "test"
-			default:
-				docs[i].Split = "train"
-			}
-		default:
+		if mode != "hash" {
 			docs[i].Split = mode
+			continue
+		}
+		h := fnv.New32a()
+		if docs[i].Partial {
+			h.Write([]byte(docs[i].Text))
+		} else {
+			h.Write([]byte(docs[i].ID))
+		}
+		switch h.Sum32() % 10 {
+		case 8:
+			docs[i].Split = "dev"
+		case 9:
+			docs[i].Split = "test"
+		default:
+			docs[i].Split = "train"
 		}
 	}
+	return nil
 }
 
 // Split returns the documents of one split.

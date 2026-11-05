@@ -20,9 +20,16 @@ import (
 // so a retrained model is shipped as a file, not as a release. The manifest
 // fields let the loader refuse incompatible artifacts and let operators see
 // what they are running.
+// MaxThreshold caps every threshold. A model trained on synthetic data is
+// overconfident on it, so the 1st percentile of its true-positive scores can
+// sit at 0.99; on real text that would drop true PII. Under a never-lose-PII
+// policy a candidate the model finds more likely than not is always kept.
+const MaxThreshold = 0.5
+
 type Model struct {
 	Version          string                     `json:"version"`
 	SchemaVersion    int                        `json:"schema_version"`
+	Window           int                        `json:"window"` // context window the features were computed with
 	TrainedAt        string                     `json:"trained_at"`
 	TrainingData     string                     `json:"training_data"`
 	Examples         int                        `json:"examples"`
@@ -62,8 +69,10 @@ func (m *Model) Explain(feats []string, k int) string {
 		w float32
 	}
 	var kvs []kv
+	seen := map[string]bool{}
 	for _, f := range feats {
-		if w, ok := m.Weights[f]; ok && w != 0 {
+		if w, ok := m.Weights[f]; ok && w != 0 && !seen[f] {
+			seen[f] = true
 			kvs = append(kvs, kv{f, w})
 		}
 	}
@@ -98,9 +107,31 @@ func Load(path string) (*Model, error) {
 		return nil, fmt.Errorf("model %s has feature schema %d, this build expects %d", path, m.SchemaVersion, SchemaVersion)
 	}
 	if m.DefaultThreshold == 0 {
-		m.DefaultThreshold = 0.5
+		m.DefaultThreshold = MaxThreshold
+	}
+	// A degenerate artifact must never load: with no weights every candidate
+	// would score sigmoid(bias) and could be suppressed wholesale.
+	if len(m.Weights) == 0 || m.Examples <= 0 {
+		return nil, fmt.Errorf("model %s is degenerate (%d weights, %d examples)", path, len(m.Weights), m.Examples)
+	}
+	if m.DefaultThreshold <= 0 || m.DefaultThreshold > MaxThreshold {
+		return nil, fmt.Errorf("model %s: default threshold %.3f outside (0, %.2f]", path, m.DefaultThreshold, MaxThreshold)
+	}
+	for t, th := range m.Thresholds {
+		if th <= 0 || th > MaxThreshold {
+			return nil, fmt.Errorf("model %s: threshold %.3f for %s outside (0, %.2f]", path, th, t, MaxThreshold)
+		}
 	}
 	return &m, nil
+}
+
+// CheckWindow refuses to run a model with a different context window than it
+// was trained with.
+func (m *Model) CheckWindow(window int) error {
+	if m.Window != 0 && m.Window != window {
+		return fmt.Errorf("model was trained with a %d-char window, runtime uses %d", m.Window, window)
+	}
+	return nil
 }
 
 // Example is one training row.
@@ -128,10 +159,14 @@ func DefaultTrainOptions() TrainOptions {
 
 // Train fits logistic regression with AdaGrad SGD.
 func Train(ex []Example, o TrainOptions) *Model {
-	counts := map[string]int{}
+	counts := map[string]int{} // examples a feature occurs in (distinct per example)
 	for _, e := range ex {
+		seen := map[string]bool{}
 		for _, f := range e.Feats {
-			counts[f]++
+			if !seen[f] {
+				seen[f] = true
+				counts[f]++
+			}
 		}
 	}
 	idx := map[string]int32{}
@@ -199,7 +234,7 @@ func Train(ex []Example, o TrainOptions) *Model {
 		Bias:             float32(bias),
 		Weights:          make(map[string]float32, len(names)),
 		Thresholds:       map[pii.EntityType]float64{},
-		DefaultThreshold: 0.5,
+		DefaultThreshold: MaxThreshold,
 	}
 	for j, n := range names {
 		if w[j] != 0 {

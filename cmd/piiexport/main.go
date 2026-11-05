@@ -48,7 +48,9 @@ func main() {
 	if err != nil {
 		fail(err)
 	}
-	corpus.AssignSplits(docs, *realSplit)
+	if err := corpus.AssignSplits(docs, *realSplit); err != nil {
+		fail(err)
+	}
 	if err := os.MkdirAll(*out, 0o755); err != nil {
 		fail(err)
 	}

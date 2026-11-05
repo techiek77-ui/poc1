@@ -162,3 +162,71 @@ func TestNoOverlappingDictionaryNames(t *testing.T) {
 		}
 	}
 }
+
+func TestCSVStrayQuoteAndDelimiter(t *testing.T) {
+	text := "name,mobile,notes\nA,9876543210,5'11\" tall\nB,9123456789,ok\nC,9988776655,fine\n"
+	l := ParseCSVLayout(text)
+	if len(l.Rows) != 4 {
+		t.Fatalf("rows = %d, want 4 (a stray quote must not swallow the file)", len(l.Rows))
+	}
+	if col, hdr, _ := l.ColumnAt(strings.Index(text, "9988776655")); col != 1 || hdr != "mobile" {
+		t.Fatalf("last mobile mapped to col %d %q", col, hdr)
+	}
+	if d := detectDelim("\"Name, Last\";Mobile\nx;y\n"); d != ';' {
+		t.Fatalf("delimiter inside quotes counted: got %q", d)
+	}
+	cs := run(t, text, pii.FormatCSV)
+	if types(cs)[pii.Mobile] != 3 {
+		t.Fatalf("all three mobiles should be header-gated, got %v", types(cs))
+	}
+}
+
+func TestNamesWithInitialsAndTrailingPunctuation(t *testing.T) {
+	cases := map[string]string{
+		"Name: A. Kumar":                "A. Kumar",
+		"Name: R. K. Sharma, Mobile: 9": "R. K. Sharma",
+		"Dear Rahul Sharma.":            "Rahul Sharma",
+		"Regards, Priya Nair's team":    "Priya Nair",
+		"Applicant: S. Ramanathan":      "S. Ramanathan",
+	}
+	for text, want := range cases {
+		found := false
+		for _, c := range run(t, text, pii.FormatText) {
+			if c.Type == pii.Name && c.Value == want {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("%q: want NAME %q, got %+v", text, want, run(t, text, pii.FormatText))
+		}
+	}
+}
+
+func TestAddressWalkBackKeepsFirstCharacter(t *testing.T) {
+	for _, text := range []string{"Deliver to: Flat 302, MG Road, Bangalore 560001", "Ship to: 12, MG Road, Indiranagar, Bengaluru 560038"} {
+		for _, c := range run(t, text, pii.FormatText) {
+			if c.Type == pii.Address && (strings.HasPrefix(c.Value, "lat ") || strings.HasPrefix(c.Value, "2, ")) {
+				t.Errorf("%q: address span lost its first character: %q", text, c.Value)
+			}
+		}
+	}
+}
+
+func TestEmailIsNotUPI(t *testing.T) {
+	if got := types(run(t, "UPI helpdesk: care@axisbank.com", pii.FormatText)); got[pii.UPI] != 0 {
+		t.Fatalf("e-mail reported as UPI: %v", got)
+	}
+	if got := types(run(t, "UPI: ramesh@okaxis", pii.FormatText)); got[pii.UPI] != 1 {
+		t.Fatalf("real UPI handle lost: %v", got)
+	}
+}
+
+func TestLoneDigitBeforeMobileIsNotAGroup(t *testing.T) {
+	d := New(Options{Window: 60, RequireKeyword: false})
+	for _, text := range []string{"Sl No 10 9876543210", "Qty 2 +91 98765 43210"} {
+		cs := d.Detect(NewDocView(&pii.Doc{ID: "x", Format: pii.FormatText, Text: text}))
+		if types(cs)[pii.Mobile] == 0 {
+			t.Errorf("%q: mobile lost to the digit-run check", text)
+		}
+	}
+}

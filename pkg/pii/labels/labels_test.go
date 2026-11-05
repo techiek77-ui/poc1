@@ -1,6 +1,7 @@
 package labels
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/techiek77-ui/poc1/pkg/pii"
@@ -68,6 +69,22 @@ func TestIdentifierForms(t *testing.T) {
 		if len(hits) == 0 || hits[0].Kind != KAadhaar {
 			t.Errorf("%q: hits = %+v, want aadhaar", s, kinds(hits))
 		}
+	}
+}
+
+func TestPhrasesDoNotSpanLineBreaksOrGaps(t *testing.T) {
+	for _, s := range []string{"aadhaar\n\n\nnumber of records: 42", "account\n----\nnumber", "PAN\n\nCard holder"} {
+		for _, h := range Find(s) {
+			if strings.ContainsAny(s[h.Start:h.End], "\n") {
+				t.Errorf("%q: phrase %q must not span a line break", s, h.Phrase)
+			}
+		}
+	}
+	if hits := Find("Aadhaar - Number: 1"); len(hits) != 1 || hits[0].Phrase != "aadhaar number" {
+		t.Errorf("short separators must still join: %+v", hits)
+	}
+	if hits := Find("date of birth"); len(hits) != 1 || hits[0].NTok != 3 {
+		t.Errorf("multi-word phrase broken: %+v", hits)
 	}
 }
 

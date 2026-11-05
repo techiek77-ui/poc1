@@ -75,7 +75,7 @@ file ──► regex + checksum ──► candidates ──► context analysis 
 
 ### 4.2 Evaluation protocol
 
-A detection is a (span, claimed type). It is a true positive if a labelled span of that type covers at least half of it; otherwise a false positive, bucketed by what the span really was (`bank_account`, `rrn`, `ppo`, `dummy`, `no_truth`…). Verifiers only re-score the baseline's detections, so **TP retention** (kept TPs / baseline TPs) and **FP reduction** are the two numbers that matter; recall against all labelled spans is reported separately. Thresholds are chosen on dev, results reported on test, and the golden set is scored with the same thresholds.
+A detection is a (span, claimed type). It is a true positive if a labelled span of that type covers at least half of the detection and the detection covers at least half of that span; otherwise a false positive, bucketed by what the span really was (`bank_account`, `rrn`, `ppo`, `dummy`, `no_truth`…). Nested PII is labelled (a PIN code inside an address is both), so PIN codes in addresses count as PIN codes; in corpora that do not label nesting such detections are excluded as unknown rather than counted as negatives. Verifiers only re-score the baseline's detections, so **TP retention** (kept TPs / baseline TPs) and **FP reduction** are the two numbers that matter; recall against all labelled spans is reported separately. Thresholds are chosen on dev, results reported on test, and the golden set is scored with the same thresholds.
 
 ## 5. Results
 

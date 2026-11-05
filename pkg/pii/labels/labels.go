@@ -10,6 +10,7 @@ package labels
 import (
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/techiek77-ui/poc1/pkg/pii"
 )
@@ -290,11 +291,16 @@ var Phrases = map[Kind][]string{
 
 // Token is a lowercase alphanumeric run with its byte offsets in the source.
 type Token struct {
-	Text  string
-	Norm  string // OCR-normalised variant (0->o, 1->l, 5->s, 8->b) when the token is mostly letters; else == Text
-	Start int
-	End   int
+	Text    string
+	Norm    string // OCR-normalised variant (0->o, 1->l, 5->s, 8->b) when the token is mostly letters; else == Text
+	Start   int
+	End     int
+	Newline bool // a line break separates this token from the previous one
 }
+
+// maxTokenGap is the largest number of bytes allowed between two tokens of
+// one phrase (" - ", "_", "/", ". ").
+const maxTokenGap = 3
 
 // Tokenize splits text into lowercase [a-z0-9]+ tokens, breaking on
 // underscores and camelCase boundaries so that "aadhaarNo", "aadhaar_no" and
@@ -303,10 +309,12 @@ func Tokenize(text string) []Token {
 	var toks []Token
 	start := -1
 	prevLower := false
+	newline := false
 	flush := func(end int) {
 		if start >= 0 && end > start {
 			raw := text[start:end]
-			toks = append(toks, Token{Text: strings.ToLower(raw), Norm: ocrNorm(strings.ToLower(raw)), Start: start, End: end})
+			toks = append(toks, Token{Text: strings.ToLower(raw), Norm: ocrNorm(strings.ToLower(raw)), Start: start, End: end, Newline: newline})
+			newline = false
 		}
 		start = -1
 	}
@@ -329,6 +337,9 @@ func Tokenize(text string) []Token {
 			}
 		default:
 			flush(i)
+			if c == '\n' || c == '\r' {
+				newline = true
+			}
 		}
 		prevLower = isLower
 	}
@@ -348,8 +359,8 @@ func ocrNorm(t string) string {
 			digits++
 		}
 	}
-	if digits == 0 || letters == 0 || letters < digits {
-		return t
+	if digits == 0 || letters < digits || (letters < 2 && !(len(t) == 2 && t[1] == '0')) {
+		return t // "D1", "R5" are not OCR errors; "N0" (No) is
 	}
 	r := strings.NewReplacer("0", "o", "1", "l", "5", "s", "8", "b", "2", "z", "6", "b", "7", "t")
 	return r.Replace(t)
@@ -392,9 +403,9 @@ type phraseKey struct {
 
 var (
 	// index: first token -> candidate phrases (as token slices), longest first
-	index   map[string][]phraseEntry
-	maxTok  int
-	builtOK bool
+	index     map[string][]phraseEntry
+	maxTok    int
+	buildOnce sync.Once
 )
 
 type phraseEntry struct {
@@ -404,9 +415,10 @@ type phraseEntry struct {
 }
 
 func build() {
-	if builtOK {
-		return
-	}
+	buildOnce.Do(buildIndex)
+}
+
+func buildIndex() {
 	index = map[string][]phraseEntry{}
 	for kind, phrases := range Phrases {
 		for _, p := range phrases {
@@ -423,7 +435,6 @@ func build() {
 	for k := range index {
 		sort.SliceStable(index[k], func(i, j int) bool { return len(index[k][i].toks) > len(index[k][j].toks) })
 	}
-	builtOK = true
 }
 
 // Find returns every label phrase occurrence in text. At each token position
@@ -492,7 +503,9 @@ func matchAt(toks []Token, i int, useNorm bool) *phraseEntry {
 			if useNorm {
 				t = toks[i+j].Norm
 			}
-			if t != pe.toks[j] {
+			// tokens of one phrase sit next to each other: "a/c", "aadhaar_no",
+			// "date of birth" — never across a line break or a long gap
+			if t != pe.toks[j] || toks[i+j].Start-toks[i+j-1].End > maxTokenGap || toks[i+j].Newline {
 				match = false
 				break
 			}

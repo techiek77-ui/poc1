@@ -5,9 +5,12 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -24,7 +27,7 @@ import (
 func main() {
 	var corpora corpus.Paths
 	flag.Var(&corpora, "corpus", "corpus file (piigen JSONL, markup .txt, or decision JSONL); repeatable")
-	realSplit := flag.String("real-split", "test", "split for real documents that carry none: train|dev|test|hash")
+	realSplit := flag.String("real-split", "", "split for real documents that carry none: train|dev|test|hash (default: what the model was trained with, else test)")
 	modelPath := flag.String("model", "models/tier_a_lr.json", "Tier A model artifact")
 	window := flag.Int("window", 60, "context window")
 	retain := flag.Float64("retain", 0.99, "TP retention target for threshold selection")
@@ -42,13 +45,30 @@ func main() {
 	if err != nil {
 		fail(err)
 	}
-	corpus.AssignSplits(docs, *realSplit)
+	if err := corpus.AssignSplits(docs, *realSplit); err != nil {
+		fail(err)
+	}
 	dev, test := corpus.Split(docs, "dev"), corpus.Split(docs, *split)
 	corpusPath := new(string)
 	*corpusPath = corpora.String()
 	m, err := verify.Load(*modelPath)
 	if err != nil {
 		fail(err)
+	}
+	if err := m.CheckWindow(*window); err != nil {
+		fail(err)
+	}
+	if *realSplit == "" {
+		*realSplit = "test"
+		if s, ok := m.Notes["real_split"].(string); ok && s != "" {
+			*realSplit = s
+		}
+	}
+	var trainedOn []string
+	for _, p := range corpora {
+		if h := fileHash(p); h != "" && strings.Contains(m.TrainingData, "sha256:"+h) {
+			trainedOn = append(trainedOn, filepath.Base(p))
+		}
 	}
 	gated := detect.New(detect.Options{Window: *window, RequireKeyword: true})
 	ungated := detect.New(detect.Options{Window: *window, RequireKeyword: false})
@@ -78,11 +98,15 @@ func main() {
 	linDev, _, _ := eval.Scores(devItems, lin)
 	linTest, linReasons, linDur := eval.Scores(testItems, lin)
 	thL, defL := eval.ChooseThresholds(devItems, linDev, *retain, 30)
-	cfgLin := eval.Config{Name: "A linear", Scores: linTest, Thresholds: thL, Default: defL}
-	cfgLinR := eval.Config{Name: "A linear +resolve", Scores: linTest, Thresholds: thL, Default: defL, Resolve: true}
+	// The headline row uses the thresholds shipped in the artifact (the operating
+	// point a deployment would run); the re-tuned row shows what this dev split
+	// would choose, which differs when -retain/-window or the dev data differ.
+	cfgLin := eval.Config{Name: "A linear", Scores: linTest, Thresholds: m.Thresholds, Default: m.DefaultThreshold}
+	cfgLinT := eval.Config{Name: fmt.Sprintf("A linear (re-tuned on dev @%.0f%%)", 100**retain), Scores: linTest, Thresholds: thL, Default: defL}
+	cfgLinR := eval.Config{Name: "A linear +resolve", Scores: linTest, Thresholds: m.Thresholds, Default: m.DefaultThreshold, Resolve: true}
 	cfgRulesR := eval.Config{Name: "1 rules @0.5 +resolve", Scores: rulesTest, Default: 0.5, Resolve: true}
 
-	cfgs := []eval.Config{base, cfgRules, cfgRulesT, cfgRulesR, cfgLin, cfgLinR}
+	cfgs := []eval.Config{base, cfgRules, cfgRulesT, cfgRulesR, cfgLin, cfgLinT, cfgLinR}
 	// optional Tier B (ONNX transformer), only with -tags onnx and -onnx <dir>
 	bVer, closeB := extraVerifier()
 	defer closeB()
@@ -113,10 +137,13 @@ func main() {
 	linDevU, _, _ := eval.Scores(devU, lin)
 	linTestU, _, _ := eval.Scores(testU, lin)
 	thU, defU := eval.ChooseThresholds(devU, linDevU, *retain, 30)
+	if len(trainedOn) > 0 {
+		fmt.Fprintf(&sb, "\n**Note:** %s also served as training data for this model (same file hash in the manifest); real-document numbers below are not out-of-sample.\n", strings.Join(trainedOn, ", "))
+	}
 	baseU := eval.Evaluate(testU, eval.Config{Name: "regex+checksum only (no gate)", Scores: ones(len(testU)), Default: 0.5}, truthTest, 0)
 	linU := eval.Evaluate(testU, eval.Config{Name: "A linear as the gate", Scores: linTestU, Thresholds: thU, Default: defU}, truthTest, 0)
 	baseG := results[0]
-	linG := results[4]
+	linG := results[4] // "A linear" (shipped thresholds)
 	sb.WriteString("\n### Keyword gate vs. model gate\n\n")
 	sb.WriteString("The keyword gate also costs recall: values printed without a nearby label (identity-card OCR, bare table cells) are never reported. Scoring every regex+checksum match with the model instead of requiring a keyword recovers some of them.\n\n")
 	sb.WriteString("| candidate set | TP | FP | precision | recall vs. all labelled spans |\n|---|---:|---:|---:|---:|\n")
@@ -134,7 +161,7 @@ func main() {
 		for _, cfg := range []eval.Config{
 			{Name: "0 baseline", Scores: ones(len(rItems)), Default: 0.5},
 			{Name: "1 rules @0.5", Scores: rRules, Default: 0.5},
-			{Name: "A linear", Scores: rLin, Thresholds: thL, Default: defL},
+			{Name: "A linear", Scores: rLin, Thresholds: m.Thresholds, Default: m.DefaultThreshold},
 		} {
 			rr = append(rr, eval.Evaluate(rItems, cfg, rTruth, *nEx))
 		}
@@ -145,7 +172,7 @@ func main() {
 
 	// --- golden set ------------------------------------------------------------------
 	if *goldenPath != "" {
-		sb.WriteString(goldenSection(*goldenPath, m, thL, defL, *window))
+		sb.WriteString(goldenSection(*goldenPath, m, m.Thresholds, m.DefaultThreshold, *window))
 	}
 	if *dump != "" {
 		if err := dumpItems(*dump, testItems, rulesTest, linTest, linReasons); err != nil {
@@ -329,6 +356,19 @@ func ones(n int) []float64 {
 		s[i] = 1
 	}
 	return s
+}
+
+func fileHash(path string) string {
+	f, err := os.Open(path)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return ""
+	}
+	return hex.EncodeToString(h.Sum(nil))[:16]
 }
 
 func fail(err error) {

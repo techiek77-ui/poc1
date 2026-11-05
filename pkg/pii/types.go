@@ -77,6 +77,11 @@ type Doc struct {
 	// Source is "" for the synthetic generator and "real" for data brought in
 	// through markup or feedback files; training can weight real examples.
 	Source string `json:"source,omitempty"`
+	// Nested is true when PII inside other PII is labelled too (a PIN code
+	// inside an address). Without it, a candidate that lies entirely inside a
+	// labelled span of another PII type is "unknown" rather than a false
+	// positive, because the corpus simply did not say.
+	Nested bool `json:"nested,omitempty"`
 }
 
 // Candidate is one detection emitted by the baseline detector: a regex match

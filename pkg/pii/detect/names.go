@@ -2,6 +2,7 @@ package detect
 
 import (
 	"regexp"
+	"sort"
 	"strings"
 
 	"github.com/techiek77-ui/poc1/pkg/pii"
@@ -100,7 +101,8 @@ func (d *Detector) nameCandidates(v *DocView) []pii.Candidate {
 	span := func(i, n int) (int, int, int) {
 		cnt := 0
 		s, e := -1, -1
-		caps := false
+		caps, capsSet := false, false
+		lastInitial := false
 		for j := i; j < len(words) && cnt < n; j++ {
 			w := words[j]
 			if cnt > 0 {
@@ -112,18 +114,32 @@ func (d *Detector) nameCandidates(v *DocView) []pii.Candidate {
 			if gazetteer.IsNameStop(w.t) {
 				break
 			}
-			isCaps, isTitle := allCaps(w.t), capitalised(w.t) && !allCaps(w.t)
-			if !isCaps && !isTitle && !initial(w.t) {
+			isInit := initial(w.t)
+			isCaps, isTitle := allCaps(w.t) && !isInit, capitalised(w.t) && !allCaps(w.t)
+			if !isCaps && !isTitle && !isInit {
 				break
+			}
+			if !isInit { // the casing style comes from the first real word
+				if !capsSet {
+					caps, capsSet = isCaps, true
+				} else if isCaps != caps {
+					break
+				}
 			}
 			if cnt == 0 {
-				caps = isCaps
 				s = w.s
-			} else if !initial(w.t) && isCaps != caps {
-				break
 			}
 			e = w.e
+			lastInitial = isInit
 			cnt++
+		}
+		if cnt > 0 && !lastInitial { // "Sharma." / "Nair's" at a sentence end
+			for e > s && (text[e-1] == '.' || text[e-1] == '\'') {
+				e--
+			}
+			if e-s >= 2 && text[e-1] == 's' && text[e-2] == '\'' {
+				e -= 2
+			}
 		}
 		return s, e, cnt
 	}
@@ -133,12 +149,10 @@ func (d *Detector) nameCandidates(v *DocView) []pii.Candidate {
 			continue
 		}
 		after := h.End + len(sepRe.FindString(text[h.End:]))
-		for i, w := range words {
-			if w.s == after {
-				if s, e, n := span(i, 4); n >= 1 {
-					emit(s, e, true)
-				}
-				break
+		i := sort.Search(len(words), func(i int) bool { return words[i].s >= after })
+		if i < len(words) && words[i].s == after {
+			if s, e, n := span(i, 4); n >= 1 {
+				emit(s, e, true)
 			}
 		}
 	}
@@ -242,10 +256,11 @@ func (d *Detector) addressCandidates(v *DocView) []pii.Candidate {
 		segs := strings.Split(pre, ",")
 		for k := len(segs) - 1; k >= 0; k-- {
 			seg := segs[k]
-			segStart := start - len(seg)
+			segBase := start - len(seg) // where this segment's text begins
 			if k < len(segs)-1 {
-				segStart-- // the comma
+				segBase-- // the comma that followed it
 			}
+			segStart := segBase
 			trimmed := strings.TrimSpace(seg)
 			if trimmed == "" && k == len(segs)-1 {
 				start = segStart
@@ -254,13 +269,14 @@ func (d *Detector) addressCandidates(v *DocView) []pii.Candidate {
 			// cut at a label / sentence boundary inside the segment ("Deliver to: Flat 302")
 			if idx := strings.LastIndexAny(trimmed, ":;|"); idx >= 0 {
 				trimmed = strings.TrimSpace(trimmed[idx+1:])
-				segStart = start - len(trimmed)
+				segStart = segBase + strings.LastIndex(seg, trimmed)
 				if c := segCues(trimmed); c > 0 || len(trimmed) > 0 && k == len(segs)-1 {
 					cues += c
 					start = segStart
 				}
 				break
 			}
+			segStart = segBase + strings.Index(seg, trimmed)
 			c := segCues(trimmed)
 			if c == 0 || len(trimmed) > 48 {
 				break

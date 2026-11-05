@@ -44,7 +44,9 @@ func main() {
 	if err != nil {
 		fail(err)
 	}
-	corpus.AssignSplits(docs, *realSplit)
+	if err := corpus.AssignSplits(docs, *realSplit); err != nil {
+		fail(err)
+	}
 	train, dev := corpus.Split(docs, "train"), corpus.Split(docs, "dev")
 	fmt.Printf("corpus: %d docs (train %d, dev %d, real %d)\n", len(docs), len(train), len(dev), len(corpus.Real(docs)))
 
@@ -89,6 +91,7 @@ func main() {
 	devScores, _, _ := eval.Scores(devItems, lin)
 	th, def := eval.ChooseThresholds(devItems, devScores, *retain, 30)
 	m.Thresholds, m.DefaultThreshold = th, def
+	m.Window = *window
 	truth := eval.TruthCounts(dev)
 	base := eval.Evaluate(devItems, eval.Config{Name: "baseline", Scores: ones(len(devItems))}, truth, 0)
 	res := eval.Evaluate(devItems, eval.Config{Name: "linear", Scores: devScores, Thresholds: th, Default: def}, truth, 0)

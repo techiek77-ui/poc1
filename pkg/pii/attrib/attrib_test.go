@@ -110,3 +110,31 @@ func TestWindowNeverSplitsUTF8(t *testing.T) {
 		t.Fatalf("window boundaries split a character: left=%q right=%q", a.Left, a.Right)
 	}
 }
+
+func TestSQLEscapesAndMultiRow(t *testing.T) {
+	sql := `INSERT INTO kyc (id, note, aadhaar_no, acct_no) VALUES (1, 'O\'Brien', '738192045614', '509347182063');`
+	a := analyze(t, sql, pii.FormatText, pii.Aadhaar, "738192045614")
+	if a.Header != "aadhaar_no" {
+		t.Fatalf("escaped quote broke column mapping: header=%q", a.Header)
+	}
+	multi := `INSERT INTO kyc (id, name, aadhaar_no, acct_no) VALUES (1,'A','738192045614','509347182063'), (2,'B','840162937518','293847561021');`
+	a = analyze(t, multi, pii.FormatText, pii.Aadhaar, "840162937518")
+	if a.Header != "aadhaar_no" {
+		t.Fatalf("second tuple not mapped: header=%q", a.Header)
+	}
+	a = analyze(t, multi, pii.FormatText, pii.Aadhaar, "293847561021")
+	if a.Header != "acct_no" {
+		t.Fatalf("second tuple account not mapped: header=%q", a.Header)
+	}
+}
+
+func TestVerbAttachmentAndAdjacentValues(t *testing.T) {
+	a := analyze(t, "Order no 738192045614 is my Aadhaar number", pii.FormatText, pii.Aadhaar, "738192045614")
+	if a.SameNearest == nil || a.SameNearest.Separator != "verb" {
+		t.Fatalf("'is my Aadhaar' should be a verb attachment, got %+v", a.SameNearest)
+	}
+	a = analyze(t, "Ref No 1234567 / 738192045614 is my Aadhaar", pii.FormatText, pii.Aadhaar, "738192045614")
+	if a.Governing != nil && a.Governing.Hit.Kind == labels.KTxn {
+		t.Fatalf("'ref no' governs across an intervening number: %+v", a.Governing)
+	}
+}

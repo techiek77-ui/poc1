@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/techiek77-ui/poc1/pkg/pii"
 	"github.com/techiek77-ui/poc1/pkg/pii/attrib"
@@ -40,7 +41,11 @@ func Collect(docs []pii.Doc, det *detect.Detector, window int) ([]Item, time.Dur
 		v := detect.NewDocView(doc)
 		for _, c := range det.Detect(v) {
 			it := Item{Doc: doc, View: v, Cand: c}
-			it.TP, it.TruthIdx, it.Category = match(doc, &c)
+			var unknown bool
+			it.TP, it.TruthIdx, it.Category, unknown = match(doc, &c)
+			if unknown {
+				continue // PII inside PII of another type, in a corpus that does not label nesting
+			}
 			if doc.Partial {
 				// only what an analyst actually judged is usable
 				if it.TruthIdx < 0 {
@@ -59,30 +64,48 @@ func Collect(docs []pii.Doc, det *detect.Detector, window int) ([]Item, time.Dur
 	return items, analyze
 }
 
-// match finds the truth span with the largest overlap. The candidate is a
-// true positive if that span has the claimed type and the overlap covers at
-// least half of the shorter of the two.
-func match(doc *pii.Doc, c *pii.Candidate) (bool, int, string) {
+// match decides what a detection is. It is a true positive when a labelled
+// span of the claimed type covers at least half of the detection and the
+// detection covers at least half of that span (so neither a fragment nor a
+// wildly over-wide span counts). Otherwise the largest-overlap span gives the
+// false-positive category; a detection lying entirely inside PII of another
+// type, in a corpus that does not label nested PII, is "unknown".
+func match(doc *pii.Doc, c *pii.Candidate) (tp bool, idx int, category string, unknown bool) {
+	clen := c.End - c.Start
 	best, bestOv := -1, 0
 	for i, t := range doc.Truth {
 		ov := min(c.End, t.End) - max(c.Start, t.Start)
-		// prefer a same-type span when overlaps tie (nested spans)
-		if ov > bestOv || (ov == bestOv && ov > 0 && t.Type == c.Type && doc.Truth[best].Type != c.Type) {
+		if ov <= 0 {
+			continue
+		}
+		if t.Type == c.Type && ov*2 >= clen && ov*2 >= t.End-t.Start && (best < 0 || doc.Truth[best].Type != c.Type || ov > bestOv) {
+			if best < 0 || doc.Truth[best].Type != c.Type {
+				best, bestOv = i, ov
+			} else if ov > bestOv {
+				best, bestOv = i, ov
+			}
+		}
+	}
+	if best >= 0 {
+		return true, best, doc.Truth[best].Kind, false
+	}
+	for i, t := range doc.Truth {
+		ov := min(c.End, t.End) - max(c.Start, t.Start)
+		if ov > bestOv {
 			best, bestOv = i, ov
 		}
 	}
 	if best < 0 {
-		return false, -1, "no_truth"
+		return false, -1, "no_truth", false
 	}
 	t := doc.Truth[best]
-	shorter := min(c.End-c.Start, t.End-t.Start)
-	if bestOv*2 < shorter {
-		return false, -1, "no_truth"
+	if bestOv*2 < min(clen, t.End-t.Start) {
+		return false, -1, "no_truth", false
 	}
-	if t.Type == c.Type {
-		return true, best, t.Kind
+	if t.Type != "" && t.Type != c.Type && !doc.Nested && t.Start <= c.Start && t.End >= c.End {
+		return false, best, "inside_" + strings.ToLower(string(t.Type)), true
 	}
-	return false, best, t.Kind
+	return false, best, t.Kind, false
 }
 
 // TruthCounts counts labelled PII spans per type.
@@ -113,12 +136,8 @@ func Scores(items []Item, ver verify.Verifier) ([]float64, []string, time.Durati
 	return scores, reasons, time.Since(start)
 }
 
-// MaxThreshold caps every chosen threshold. A model trained on synthetic data
-// is overconfident on it, so the 1st percentile of its true-positive scores can
-// sit at 0.99; on real text that would drop true PII. Under a never-lose-PII
-// policy a candidate the model finds more likely than not is always kept, so
-// thresholds are never above 0.5 (they may be lower).
-var MaxThreshold = 0.5
+// MaxThreshold caps every chosen threshold (see verify.MaxThreshold).
+var MaxThreshold = verify.MaxThreshold
 
 // ChooseThresholds picks, per entity type, the highest threshold (capped at
 // MaxThreshold) that keeps at least `retain` of that type's true-positive
@@ -330,10 +349,18 @@ func exampleLine(it *Item, score float64) string {
 	ctx := strings.ReplaceAll(it.A.Left, "\n", "⏎")
 	rctx := strings.ReplaceAll(it.A.Right, "\n", "⏎")
 	if len(ctx) > 40 {
-		ctx = ctx[len(ctx)-40:]
+		cut := len(ctx) - 40
+		for cut < len(ctx) && !utf8.RuneStart(ctx[cut]) {
+			cut++
+		}
+		ctx = ctx[cut:]
 	}
 	if len(rctx) > 25 {
-		rctx = rctx[:25]
+		cut := 25
+		for cut > 0 && !utf8.RuneStart(rctx[cut]) {
+			cut--
+		}
+		rctx = rctx[:cut]
 	}
 	return fmt.Sprintf("%s [%s truth=%s %.2f] …%s«%s»%s…", it.Doc.Shape, it.Cand.Type, it.Category, score, ctx, it.Cand.Value, rctx)
 }
@@ -342,10 +369,23 @@ func exampleLine(it *Item, score float64) string {
 func Markdown(results []*Result, title string) string {
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "### %s\n\n", title)
-	fmt.Fprintf(&sb, "| configuration | detections kept | TP | FP | precision | TP retention | FP reduction |\n|---|---:|---:|---:|---:|---:|---:|\n")
-	for _, r := range results {
-		fmt.Fprintf(&sb, "| %s | %d | %d | %d | %.1f%% | %.2f%% | %.1f%% |\n", r.Name, r.Kept, r.Total.TP, r.Total.FP, 100*r.Total.Precision(), 100*r.Total.Retention(), 100*r.Total.FPReduction())
+	fmt.Fprintf(&sb, "| configuration | detections kept | TP | FP | precision | TP retention (detections) | span retention | FP reduction |\n|---|---:|---:|---:|---:|---:|---:|---:|\n")
+	baseCovered := 0
+	for _, n := range results[0].Covered {
+		baseCovered += n
 	}
+	for _, r := range results {
+		covered := 0
+		for _, n := range r.Covered {
+			covered += n
+		}
+		span := 1.0
+		if baseCovered > 0 {
+			span = float64(covered) / float64(baseCovered)
+		}
+		fmt.Fprintf(&sb, "| %s | %d | %d | %d | %.1f%% | %.2f%% | %.2f%% | %.1f%% |\n", r.Name, r.Kept, r.Total.TP, r.Total.FP, 100*r.Total.Precision(), 100*r.Total.Retention(), 100*span, 100*r.Total.FPReduction())
+	}
+	sb.WriteString("\n_TP retention counts detections (several may cover one labelled span); span retention counts labelled spans that keep at least one detection._\n")
 	// per type
 	types := []pii.EntityType{}
 	for t := range results[0].ByType {

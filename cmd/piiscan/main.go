@@ -44,6 +44,10 @@ func main() {
 
 	var lin *verify.Linear
 	if m, err := verify.Load(*modelPath); err == nil {
+		if err := m.CheckWindow(*window); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
 		lin = &verify.Linear{M: m}
 	} else {
 		fmt.Fprintf(os.Stderr, "(no model loaded: %v)\n", err)

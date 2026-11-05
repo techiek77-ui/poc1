@@ -161,11 +161,11 @@ score and reason, and the model score, decision and top feature contributions.
 |---|---|
 | `piigen` | `-n` documents, `-seed`, `-out`, `-hardneg` share of 12-digit non-Aadhaar values forced to pass Verhoeff (default 0.35) |
 | `piitrain` | `-corpus`, `-out`, `-window` (60), `-retain` TP-retention target for thresholds (0.99), `-epochs`, `-lr`, `-l2`, `-mincount`, `-posw`, `-prune` |
-| `piieval` | `-corpus`, `-model`, `-window`, `-retain`, `-split` (test), `-out`, `-golden` (testdata/golden.txt, '' to skip), `-dump` JSONL of every candidate with scores for error analysis, `-examples`; with `-tags onnx`: `-onnx <dir>`, `-ort <libonnxruntime.so>` |
+| `piieval` | `-corpus` (repeatable), `-model`, `-window`, `-retain`, `-split` (test), `-real-split` (default: the model's), `-out`, `-golden` (testdata/golden.txt, '' to skip), `-dump` JSONL of every candidate with scores for error analysis, `-examples`; with `-tags onnx`: `-onnx <dir>`, `-ort <libonnxruntime.so>`. The headline "A linear" row uses the thresholds shipped in the artifact; a second row shows thresholds re-tuned on this dev split |
 | `piiscan` | `-format text|csv|json|log`, `-model`, `-window`, `-ungated` |
 | `piiexport` | `-corpus`, `-out`, `-window` |
 | `piibench` | `-onnx <dir>`, `-ort`, `-data`, `-n` |
-| `piiconvert` | `-in`, `-out`, `-text-field`, `-spans-field`, `-start-field`/`-end-field`/`-label-field`, `-offsets byte|rune|auto`, `-map THEIRS=OURS,…`, `-unmapped nonpii|drop`, `-format`, `-split` |
+| `piiconvert` | `-in`, `-out`, `-text-field`, `-spans-field`, `-start-field`/`-end-field`/`-label-field`, `-offsets byte|rune|auto`, `-map THEIRS=OURS,…`, `-unmapped drop|nonpii` (required when unmapped labels exist), `-format`, `-split` |
 
 Environment: `PII_ORT_LIB` (path to the ONNX Runtime shared library),
 `PII_ORT_THREADS` (intra-op threads per session, default 1).
@@ -173,11 +173,17 @@ Environment: `PII_ORT_LIB` (path to the ONNX Runtime shared library),
 ## 6. Evaluation protocol
 
 A detection is a *(span, claimed type)*. It is a **true positive** if a labelled span
-of that type covers at least half of it, otherwise a **false positive** bucketed by
-what the span really was (`bank_account`, `rrn`, `ppo`, `dummy`, `no_truth`, …).
-Verifiers only re-score the baseline's detections, so the two headline numbers are
-**TP retention** (kept TPs / baseline TPs) and **FP reduction**; recall against all
-labelled spans is reported separately, counting each labelled span once. Thresholds
+of that type covers at least half of the detection **and** the detection covers at
+least half of that span (neither a fragment nor a wildly over-wide span counts);
+otherwise it is a **false positive** bucketed by what the span really was
+(`bank_account`, `rrn`, `ppo`, `dummy`, `no_truth`, …). A detection lying entirely
+inside labelled PII of another type (a PIN code inside an address) is a true positive
+only when the corpus labels nested PII — the generator does (`nested: true`); in a
+corpus that does not, such detections are *unknown* and excluded rather than counted
+as negatives. Verifiers only re-score the baseline's detections, so the headline
+numbers are **TP retention** (kept TP detections / baseline TP detections), **span
+retention** (labelled spans that keep at least one detection) and **FP reduction**;
+recall against all labelled spans is reported separately, counting each span once. Thresholds
 are chosen on `dev`, results reported on `test`, and the golden set is scored with
 the same thresholds. `piieval` also reports:
 
@@ -399,9 +405,9 @@ Retraining is a file-in, file-out operation; no code changes. Three input forms 
 1. **Hand-marked snippets** (`.txt`): the golden-set markup. Paste real lines, mark PII as `[[TYPE:value]]` and look-alikes as `[[-:kind:value]]`; everything unmarked counts as "not PII". Separate documents with `=== <format> <shape> <title>`. See `testdata/sample_real.txt`.
 2. **Decision records** (`.jsonl`): one analyst judgement per line, straight from a review queue —
    `{"text": "<the line or snippet>", "format": "text", "value": "965147382010", "type": "AADHAAR", "decision": "fp"}`
-   (`start`/`end` byte offsets instead of `value` when the same digits occur twice; `decision` is `tp` or `fp`; optional `split` and `id`). Records become *partially labelled* documents: only the judged candidate is used for training and scoring, nothing else in the snippet is assumed. A rejected AADHAAR claim says nothing about a BANK_ACCOUNT claim on the same digits, and the loader respects that. See `testdata/sample_decisions.jsonl`.
+   (`start`/`end` byte offsets instead of `value` when the same digits occur twice; `decision` is `tp` or `fp`; optional `split` and `id`; `type`, `format` and `split` are validated and a typo is an error, not a silent miscount). Records become *partially labelled* documents: only the judged candidate is used for training and scoring, nothing else in the snippet is assumed. A rejected AADHAAR claim says nothing about a BANK_ACCOUNT claim on the same digits, and the loader respects that. See `testdata/sample_decisions.jsonl`.
 3. **Full documents** (`.jsonl` of `pii.Doc`) with byte-offset spans — what `piigen` writes; use it if you label whole files with a tool.
-4. **Any span-labelled NER dataset** (`{"text": …, "spans": [{"start", "end", "label"}]}`, the layout of ai4privacy, Nemotron-PII and most annotation tools) through `piiconvert`, which maps the dataset's label names onto this detector's entity types and keeps unmapped labels as non-PII look-alikes (or drops them with `-unmapped drop`); rune offsets from Python tooling are converted to byte offsets automatically:
+4. **Any span-labelled NER dataset** (`{"text": …, "spans": [{"start", "end", "label"}]}`, the layout of ai4privacy, Nemotron-PII and most annotation tools) through `piiconvert`, which maps the dataset's label names onto this detector's entity types. Labels missing from the map are an error until you say what they are: `-unmapped drop` ignores them and marks those documents partially labelled (safe default when unsure), `-unmapped nonpii` keeps them as non-PII look-alikes (only right if the dataset labels no PII outside your map — a forgotten `PHONE_NUMBER=MOBILE` would otherwise teach the model to suppress phone numbers). Offsets are read as rune indexes or bytes, decided once per file and checked against the span text when the dataset provides it:
 
    ```bash
    go run ./cmd/piiconvert -in theirs.jsonl -out data/theirs.jsonl -spans-field privacy_mask -map 'AADHAAR_NUMBER=AADHAAR,PAN_NUMBER=PAN,PERSON=NAME,STREET_ADDRESS=ADDRESS' -split hash
@@ -426,7 +432,7 @@ go run ./cmd/piitrain -corpus data/corpus.jsonl -corpus reviews.jsonl -corpus sn
 go run ./cmd/piiexport -corpus data/corpus.jsonl -corpus reviews.jsonl -out data/tierb
 ```
 
-`-real-split` places real documents that carry no `split`: `train`, `dev`, `test`, or `hash` (80/10/10 by id). `piieval` prints a separate "Real documents" table for the real part of the evaluated split, so the synthetic numbers never hide what happens on your data. The artifact manifest records every input file with its hash.
+`-real-split` places real documents that carry no `split`: `train`, `dev`, `test`, or `hash` (80/10/10; decisions about the same snippet always share a split). `piieval` defaults to the mode recorded in the model's manifest and prints a note when an input file was also used for training, so real-data numbers are never accidentally in-sample; it prints a separate "Real documents" table for the real part of the evaluated split. The artifact manifest records every input file with its hash, the context window and the split mode; `piieval`/`piiscan` refuse a model trained with a different window, and `verify.Load` refuses a degenerate artifact (no weights, thresholds outside (0, 0.5]).
 
 Privacy: store the snippet around the detection (the 60-character window is enough) and the decision, not the files; strip anything else before it leaves the scanner. The whole retrain runs offline on your side.
 

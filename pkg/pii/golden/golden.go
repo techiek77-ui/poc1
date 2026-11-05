@@ -84,6 +84,9 @@ func unmark(s string) (string, []pii.TruthSpan, error) {
 		out.WriteString(val)
 		t := pii.TruthSpan{Start: st, End: out.Len(), Kind: kind}
 		if typ != "-" {
+			if !knownType(pii.EntityType(typ)) {
+				return "", nil, fmt.Errorf("unknown entity type %q in %q (known: %v)", typ, s[m[0]:m[1]], pii.AllTypes)
+			}
 			t.Type = pii.EntityType(typ)
 			if kind == "" {
 				t.Kind = strings.ToLower(typ)
@@ -96,6 +99,15 @@ func unmark(s string) (string, []pii.TruthSpan, error) {
 	}
 	out.WriteString(s[last:])
 	return out.String(), truth, nil
+}
+
+func knownType(t pii.EntityType) bool {
+	for _, k := range pii.AllTypes {
+		if k == t {
+			return true
+		}
+	}
+	return false
 }
 
 // LoadFile reads and parses a golden file.

@@ -112,7 +112,9 @@ type NameInfo struct {
 }
 
 var (
-	valueRe   = regexp.MustCompile(`\d(?:[\d \-/]{2,}\d)?|\b[A-Z0-9]*\d[A-Z0-9]*\b|\S+@\S+`)
+	// a number may contain single separators ("7381 9204 5614", "03/11/2026")
+	// but " / " or " - " separates two values
+	valueRe   = regexp.MustCompile(`\d+(?:[ \-/]\d+)*|\b[A-Z0-9]*\d[A-Z0-9]*\b|\S+@\S+`)
 	insertRe  = regexp.MustCompile(`(?is)insert\s+into\s+[\w."` + "`" + `\[\]]+\s*\(([^)]*)\)\s*values\s*\(`)
 	testWords = map[string]bool{"test": true, "tests": true, "testing": true, "sample": true, "dummy": true, "example": true,
 		"fixture": true, "fixtures": true, "mock": true, "fake": true, "demo": true, "placeholder": true, "xxxx": true,
@@ -157,10 +159,21 @@ func Analyze(v *detect.DocView, c *pii.Candidate, window int) *Analysis {
 	var values [][2]int
 	for _, loc := range valueRe.FindAllStringIndex(text[from:to], -1) {
 		s, e := loc[0]+from, loc[1]+from
-		if e <= c.Start || s >= c.End {
-			if isValueLike(text[s:e]) {
-				values = append(values, [2]int{s, e})
+		// a span that touches the candidate is clipped, not dropped: the parts
+		// outside the candidate may be values of their own
+		if s < c.Start && e > c.Start {
+			if l := strings.TrimRight(text[s:c.Start], " -/"); isValueLike(l) {
+				values = append(values, [2]int{s, s + len(l)})
 			}
+		}
+		if s < c.End && e > c.End {
+			r := strings.TrimLeft(text[c.End:e], " -/")
+			if isValueLike(r) {
+				values = append(values, [2]int{e - len(r), e})
+			}
+		}
+		if (e <= c.Start || s >= c.End) && isValueLike(text[s:e]) {
+			values = append(values, [2]int{s, e})
 		}
 	}
 	a.OtherValues = len(values)
@@ -251,8 +264,16 @@ func Analyze(v *detect.DocView, c *pii.Candidate, window int) *Analysis {
 		}
 	}
 
-	ls := strings.LastIndexAny(text[:c.Start], "\n\r") + 1
-	le := c.End + strings.IndexAny(text[c.End:]+"\n", "\n\r")
+	// line statistics over at most 512 bytes each side: no copy, no O(n) scan
+	// per candidate on single-line files
+	ls := max(0, c.Start-512)
+	if i := strings.LastIndexAny(text[ls:c.Start], "\n\r"); i >= 0 {
+		ls += i + 1
+	}
+	le := min(len(text), c.End+512)
+	if i := strings.IndexAny(text[c.End:le], "\n\r"); i >= 0 {
+		le = c.End + i
+	}
 	line := text[ls:le]
 	a.LineLen = len(line)
 	nd := 0
@@ -384,12 +405,25 @@ func sqlColumnFor(text string, pos int) (string, bool) {
 	m := locs[len(locs)-1]
 	cols := strings.Split(seg[m[2]:m[3]], ",")
 	idx, depth := 0, 0
+	between := false // after a tuple closed, before the next "(" of a multi-row VALUES
 	var inQ byte
 	for i := start + m[1]; i < pos; i++ {
 		ch := text[i]
 		if inQ != 0 {
-			if ch == inQ {
+			switch ch {
+			case '\\':
+				i++ // escaped character inside the string ("O\'Brien")
+			case inQ:
 				inQ = 0
+			}
+			continue
+		}
+		if between {
+			switch ch {
+			case '(':
+				between, idx, depth = false, 0, 0
+			case ';':
+				return "", false
 			}
 			continue
 		}
@@ -400,9 +434,10 @@ func sqlColumnFor(text string, pos int) (string, bool) {
 			depth++
 		case ')':
 			if depth == 0 {
-				return "", false // the VALUES list closed before our value
+				between = true // "(…), (…)": the next tuple starts over at column 0
+			} else {
+				depth--
 			}
-			depth--
 		case ',':
 			if depth == 0 {
 				idx++
@@ -410,6 +445,9 @@ func sqlColumnFor(text string, pos int) (string, bool) {
 		case ';':
 			return "", false
 		}
+	}
+	if between {
+		return "", false // pos is not inside a tuple
 	}
 	if idx < len(cols) {
 		return strings.Trim(strings.TrimSpace(cols[idx]), "`\"[]"), true
@@ -427,7 +465,11 @@ func sepClass(gap string) string {
 		return "space"
 	}
 	gl := strings.ToLower(g)
-	for _, w := range []string{"no.", "no", "number", "num", "#", "is", "was", "of", "as", "the", "my", "-", ":", "="} {
+	// "7381… is my Aadhaar", "7381… as Aadhaar": decide before stripping filler
+	if gl == "is" || gl == "as" || strings.HasPrefix(gl, "is ") || strings.HasPrefix(gl, "was ") || strings.HasPrefix(gl, "as ") {
+		return "verb"
+	}
+	for _, w := range []string{"no.", "no", "number", "num", "#", "of", "the", "my", "-", ":", "="} {
 		gl = strings.TrimSpace(strings.TrimPrefix(gl, w))
 	}
 	switch {
@@ -447,8 +489,6 @@ func sepClass(gap string) string {
 		return "paren"
 	case strings.HasPrefix(g, ",") || strings.HasPrefix(g, ";") || strings.HasPrefix(g, "|"):
 		return "comma"
-	case strings.HasPrefix(gl, "is") || strings.HasPrefix(gl, "as"):
-		return "verb"
 	case len(gl) == 0:
 		return "words"
 	case len(gl) > 15:

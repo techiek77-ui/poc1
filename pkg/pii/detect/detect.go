@@ -32,6 +32,8 @@ type Spec struct {
 	Re       *regexp.Regexp
 	Validate func(match string) bool // structural / checksum validation
 	Numeric  bool                    // candidate is a digit string: reject when embedded in a longer digit run
+	// Reject, when set, drops a match because of what surrounds it.
+	Reject func(text string, st, en int) bool
 }
 
 // Specs are the regexes and validators of the baseline. They are deliberately
@@ -84,7 +86,11 @@ var Specs = []Spec{
 		Validate: func(m string) bool { return true }},
 	{Type: pii.UPI, Kind: labels.KUPI,
 		Re:       regexp.MustCompile(`\b[A-Za-z0-9.\-_]{2,}@(?:ok[a-z]{3,}|ybl|ibl|axl|paytm|upi|apl|yapl|rapl|icici|sbi|hdfcbank|axisbank|kotak|airtel|freecharge|jio|fbl|idfcbank|yesbank|barodampay|pnb|unionbank|indus|dbs|rbl|federal|boi|cnrb|aubank|waicici|waaxis|wahdfcbank|wasbi|ptyes|ptaxis|pthdfc|ptsbi)\b`),
-		Validate: func(m string) bool { return !strings.Contains(m[strings.IndexByte(m, '@'):], ".") }},
+		Validate: func(m string) bool { return true },
+		// "care@axisbank.com" is an e-mail whose domain starts with a UPI handle
+		Reject: func(text string, st, en int) bool {
+			return en+1 < len(text) && text[en] == '.' && isAlpha(text[en+1])
+		}},
 	{Type: pii.BankAccount, Kind: labels.KBankAccount, Numeric: true,
 		Re:       regexp.MustCompile(`\b\d{9,18}\b`),
 		Validate: func(m string) bool { return true }},
@@ -165,10 +171,11 @@ func New(opts Options) *Detector {
 
 // DocView caches per-document analysis shared by the detector and verifiers.
 type DocView struct {
-	Doc    *pii.Doc
-	Tokens []labels.Token
-	Labels []labels.Hit
-	CSV    *CSVLayout // nil unless Format == csv
+	Doc      *pii.Doc
+	Tokens   []labels.Token
+	Labels   []labels.Hit
+	CSV      *CSVLayout // nil unless Format == csv
+	maxLabel int        // longest label hit in bytes (LabelsIn's search bound)
 }
 
 // NewDocView tokenizes and label-scans a document once.
@@ -176,6 +183,11 @@ func NewDocView(doc *pii.Doc) *DocView {
 	v := &DocView{Doc: doc}
 	v.Tokens = labels.Tokenize(doc.Text)
 	v.Labels = labels.FindTokens(v.Tokens)
+	for _, h := range v.Labels {
+		if n := h.End - h.Start; n > v.maxLabel {
+			v.maxLabel = n
+		}
+	}
 	if doc.Format == pii.FormatCSV {
 		v.CSV = ParseCSVLayout(doc.Text)
 	}
@@ -184,10 +196,10 @@ func NewDocView(doc *pii.Doc) *DocView {
 
 // LabelsIn returns label hits overlapping [from,to).
 func (v *DocView) LabelsIn(from, to int) []labels.Hit {
-	// Labels are sorted by Start and no phrase is longer than maxPhraseLen
-	// bytes, so the first hit that can overlap [from,to) starts at or after
-	// from-maxPhraseLen; binary search there instead of scanning the document.
-	i := sort.Search(len(v.Labels), func(i int) bool { return v.Labels[i].Start >= from-maxPhraseLen })
+	// Labels are sorted by Start and none is longer than v.maxLabel bytes, so
+	// the first hit that can overlap [from,to) starts at or after
+	// from-maxLabel; binary search there instead of scanning the document.
+	i := sort.Search(len(v.Labels), func(i int) bool { return v.Labels[i].Start >= from-v.maxLabel })
 	var out []labels.Hit
 	for ; i < len(v.Labels) && v.Labels[i].Start < to; i++ {
 		if h := v.Labels[i]; h.End > from {
@@ -196,10 +208,6 @@ func (v *DocView) LabelsIn(from, to int) []labels.Hit {
 	}
 	return out
 }
-
-// maxPhraseLen bounds the byte length of a label phrase as it appears in
-// text (the longest catalogue phrase is ~40 bytes; allow for spacing).
-const maxPhraseLen = 64
 
 // Detect returns the baseline candidates for a document. With
 // RequireKeyword=false it returns every validated regex match and sets
@@ -218,6 +226,9 @@ func (d *Detector) Detect(v *DocView) []pii.Candidate {
 				continue
 			}
 			if !s.Validate(m) {
+				continue
+			}
+			if s.Reject != nil && s.Reject(text, st, en) {
 				continue
 			}
 			c := pii.Candidate{DocID: v.Doc.ID, Start: st, End: en, Value: m, Type: s.Type, ChecksumOK: true, KeywordDist: -1, Column: -1}
@@ -272,15 +283,35 @@ func isAlnum(b byte) bool {
 
 func isDigit(b byte) bool { return b >= '0' && b <= '9' }
 
+func isAlpha(b byte) bool { return b >= 'a' && b <= 'z' || b >= 'A' && b <= 'Z' }
+
+// digitRunLen counts consecutive digits ending at i (inclusive) when back is
+// true, or starting at i when back is false.
+func digitRunLen(text string, i int, back bool) int {
+	n := 0
+	for i >= 0 && i < len(text) && isDigit(text[i]) {
+		n++
+		if back {
+			i--
+		} else {
+			i++
+		}
+	}
+	return n
+}
+
 // embeddedInDigitRun reports whether the match is a slice of a longer
 // number written with single separators ("9000 0000 0002 1234" contains an
 // Aadhaar-shaped prefix).
 func embeddedInDigitRun(text string, st, en int) bool {
+	// A neighbouring group of >= 3 digits across a single separator means the
+	// match is a slice of a longer grouped number; a lone "10 " ("Sl No 10
+	// 9876543210") or "2 " is not.
 	sep := func(b byte) bool { return b == ' ' || b == '-' || b == '/' }
-	if st >= 2 && isDigit(text[st-2]) && sep(text[st-1]) {
+	if st >= 2 && sep(text[st-1]) && digitRunLen(text, st-2, true) >= 3 {
 		return true
 	}
-	if en+1 < len(text) && sep(text[en]) && isDigit(text[en+1]) {
+	if en+1 < len(text) && sep(text[en]) && digitRunLen(text, en+1, false) >= 3 {
 		return true
 	}
 	return false

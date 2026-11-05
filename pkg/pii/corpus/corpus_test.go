@@ -29,9 +29,24 @@ func TestLoadDecisionsAndMarkup(t *testing.T) {
 	if docs[3].Split != "dev" || docs[3].Format != pii.FormatCSV {
 		t.Fatalf("split/format not carried: %+v", docs[3])
 	}
-	AssignSplits(docs, "train")
+	if err := AssignSplits(docs, "train"); err != nil {
+		t.Fatal(err)
+	}
 	if docs[0].Split != "train" || docs[3].Split != "dev" {
 		t.Fatalf("AssignSplits must only fill empty splits")
+	}
+	if err := AssignSplits(docs, "trian"); err == nil {
+		t.Fatal("misspelt split mode must be rejected")
+	}
+	// decisions about the same snippet share a split under hash mode
+	for i := range docs {
+		docs[i].Split = ""
+	}
+	if err := AssignSplits(docs, "hash"); err != nil {
+		t.Fatal(err)
+	}
+	if docs[0].Split != docs[1].Split {
+		t.Fatalf("same snippet in different splits: %s vs %s", docs[0].Split, docs[1].Split)
 	}
 
 	md, err := LoadAny(filepath.Join("..", "..", "..", "testdata", "sample_real.txt"))
