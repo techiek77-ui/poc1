@@ -1,0 +1,2 @@
+{"text": "Applicant Ramesh Kumar, Aadhaar 7381 9204 5614, account 509347182063, works at Infotech Solutions.", "privacy_mask": [{"start": 10, "end": 22, "label": "PERSON"}, {"start": 32, "end": 46, "label": "AADHAAR_NUMBER"}, {"start": 56, "end": 68, "label": "BANK_ACCOUNT_NUMBER"}, {"start": 79, "end": 97, "label": "ORGANIZATION"}]}
+{"text": "Txn ref 440291873659 for ₹ 999 to Priya Nair failed.", "privacy_mask": [{"start": 8, "end": 20, "label": "TRANSACTION_ID"}, {"start": 34, "end": 44, "label": "PERSON"}]}

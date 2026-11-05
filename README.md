@@ -105,6 +105,7 @@ vehicle, enrolment ID, user id, generic). Matching is token-based so `aadhaar_no
 | `cmd/piiscan` | run everything on a file or stdin and print detections with reasons |
 | `cmd/piiexport` | export candidate windows for Tier B training |
 | `cmd/piibench` | per-candidate latency of an ONNX model from Go |
+| `cmd/piiconvert` | convert a span-labelled NER dataset (label map, rune→byte offsets) into the corpus format |
 | `ml/train_tier_b.py` | Tier B training (pretrained or from scratch), ONNX export, int8 quantisation, thresholds |
 | `ml/make_test_onnx.py` | smoke model + tokenizer for the Go/Python parity test |
 | `testdata/golden.txt` | 48 hand-written documents (markup: `[[TYPE:value]]`, `[[-:kind:value]]`) |
@@ -164,6 +165,7 @@ score and reason, and the model score, decision and top feature contributions.
 | `piiscan` | `-format text|csv|json|log`, `-model`, `-window`, `-ungated` |
 | `piiexport` | `-corpus`, `-out`, `-window` |
 | `piibench` | `-onnx <dir>`, `-ort`, `-data`, `-n` |
+| `piiconvert` | `-in`, `-out`, `-text-field`, `-spans-field`, `-start-field`/`-end-field`/`-label-field`, `-offsets byte|rune|auto`, `-map THEIRS=OURS,…`, `-unmapped nonpii|drop`, `-format`, `-split` |
 
 Environment: `PII_ORT_LIB` (path to the ONNX Runtime shared library),
 `PII_ORT_THREADS` (intra-op threads per session, default 1).
@@ -399,6 +401,13 @@ Retraining is a file-in, file-out operation; no code changes. Three input forms 
    `{"text": "<the line or snippet>", "format": "text", "value": "965147382010", "type": "AADHAAR", "decision": "fp"}`
    (`start`/`end` byte offsets instead of `value` when the same digits occur twice; `decision` is `tp` or `fp`; optional `split` and `id`). Records become *partially labelled* documents: only the judged candidate is used for training and scoring, nothing else in the snippet is assumed. A rejected AADHAAR claim says nothing about a BANK_ACCOUNT claim on the same digits, and the loader respects that. See `testdata/sample_decisions.jsonl`.
 3. **Full documents** (`.jsonl` of `pii.Doc`) with byte-offset spans — what `piigen` writes; use it if you label whole files with a tool.
+4. **Any span-labelled NER dataset** (`{"text": …, "spans": [{"start", "end", "label"}]}`, the layout of ai4privacy, Nemotron-PII and most annotation tools) through `piiconvert`, which maps the dataset's label names onto this detector's entity types and keeps unmapped labels as non-PII look-alikes (or drops them with `-unmapped drop`); rune offsets from Python tooling are converted to byte offsets automatically:
+
+   ```bash
+   go run ./cmd/piiconvert -in theirs.jsonl -out data/theirs.jsonl -spans-field privacy_mask -map 'AADHAAR_NUMBER=AADHAAR,PAN_NUMBER=PAN,PERSON=NAME,STREET_ADDRESS=ADDRESS' -split hash
+   ```
+
+   See `testdata/sample_ner_dataset.jsonl`. Entity types outside the detector's list (`pii.AllTypes`) need a `detect.Spec` and label phrases first — the verifier only ever scores what the detector proposes.
 
 Suggested workflow:
 
