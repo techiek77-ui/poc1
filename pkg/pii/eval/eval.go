@@ -139,10 +139,24 @@ func Scores(items []Item, ver verify.Verifier) ([]float64, []string, time.Durati
 // MaxThreshold caps every chosen threshold (see verify.MaxThreshold).
 var MaxThreshold = verify.MaxThreshold
 
+// CountErrors returns how many reasons report a verifier failure.
+func CountErrors(reasons []string) int {
+	n := 0
+	for _, r := range reasons {
+		if strings.HasPrefix(r, verify.ErrorReasonPrefix) {
+			n++
+		}
+	}
+	return n
+}
+
 // ChooseThresholds picks, per entity type, the highest threshold (capped at
 // MaxThreshold) that keeps at least `retain` of that type's true-positive
-// candidates (on dev). Types with fewer than minN true positives fall back to
-// the pooled threshold.
+// candidates on dev, with a one-standard-deviation margin so the target also
+// holds on unseen data (the plain quantile is a dev-set property: with the
+// 1st percentile of n dev TPs the expected hold-out retention is below the
+// target about half the time). Types with fewer than minN true positives fall
+// back to the pooled threshold.
 func ChooseThresholds(items []Item, scores []float64, retain float64, minN int) (map[pii.EntityType]float64, float64) {
 	byType := map[pii.EntityType][]float64{}
 	var all []float64
@@ -157,7 +171,12 @@ func ChooseThresholds(items []Item, scores []float64, retain float64, minN int) 
 			return 0.5
 		}
 		sort.Float64s(s)
-		k := int(math.Floor((1 - retain) * float64(len(s))))
+		n := float64(len(s))
+		margin := math.Ceil(math.Sqrt(n * retain * (1 - retain)))
+		k := int(math.Floor((1-retain)*n) - margin)
+		if k < 0 {
+			k = 0
+		}
 		if k >= len(s) {
 			k = len(s) - 1
 		}
@@ -472,7 +491,7 @@ func Sweep(devItems, testItems []Item, devScores, testScores []float64, targets 
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "| %s: TP retention target | achieved retention (test) | FP reduction (test) | precision |\n|---|---:|---:|---:|\n", name)
 	for _, tg := range targets {
-		th, def := ChooseThresholds(devItems, devScores, tg, 30)
+		th, def := ChooseThresholds(devItems, devScores, tg, 100)
 		r := Evaluate(testItems, Config{Name: name, Scores: testScores, Thresholds: th, Default: def}, truth, 0)
 		fmt.Fprintf(&sb, "| %.1f%% | %.2f%% | %.1f%% | %.1f%% |\n", 100*tg, 100*r.Total.Retention(), 100*r.Total.FPReduction(), 100*r.Total.Precision())
 	}

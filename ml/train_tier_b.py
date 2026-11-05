@@ -16,8 +16,14 @@ Outputs in --out: tokenizer.json, model.onnx, model.int8.onnx, manifest.json, me
 
     python3 ml/train_tier_b.py --data data/tierb --out models/tier_b --base scratch --arch tiny --epochs 2
 """
-import argparse, json, math, os, random, time
+import argparse, hashlib, json, math, os, random, sys, time
 import numpy as np
+
+
+def clean_input(s):
+    """Mirror of pkg/pii/onnxinput.Clean: the Go runtime applies it to every model input."""
+    s = s.replace("[", " ").replace("]", " ").replace("\n", " ⏎ ").replace("\r", "").replace("\t", " ")
+    return " ".join(s.split())
 import torch
 from torch.utils.data import DataLoader, Dataset
 
@@ -40,10 +46,29 @@ def read_jsonl(path, limit=None):
     return rows
 
 
+# The Go runtime (github.com/sugarme/tokenizer) implements BertNormalizer with
+# explicit settings; "strip_accents": null (what uncased BERT/MiniLM ship) is
+# read as false there, and the standalone StripAccents removes different marks.
+# Both sides therefore use this exact normalizer, and Go additionally applies
+# the same NFD+strip-marks+lowercase before tokenising.
+GO_SAFE_NORMALIZER = dict(clean_text=True, handle_chinese_chars=False, strip_accents=True, lowercase=True)
+
+ADVERSARIAL = [
+    "aadhaar | - | aadhar « 738192045614 » , bank acc 509347182063",
+    "amount | - | Rs ₹ 12,34,567 ⏎ naïve café Ünïcödé « 738192045614 » İstanbul straße ﬁne",
+    "name | - | भारत सरकार ⏎ मेरा आधार, मेरी पहचान « Suresh Babu » S/O Venkata",
+    "aadhaar | - | [CLS] [SEP] [PAD] [UNK] [MASK] « 738192045614 » [SEP]",
+    "mobile | - | " + "word " * 200 + "« 9876543210 » tail",
+    "",
+    "   ",
+    "pan | aadhaar_no | ẞ Ǆ ǅ « ABCPE1234F » ﬀ ﬁ",
+]
+
+
 def fit_tokenizer(texts, vocab_size, out):
     from tokenizers import Tokenizer, models, normalizers, pre_tokenizers, trainers, processors
     tok = Tokenizer(models.WordPiece(unk_token="[UNK]"))
-    tok.normalizer = normalizers.Sequence([normalizers.NFD(), normalizers.Lowercase(), normalizers.StripAccents()])
+    tok.normalizer = normalizers.BertNormalizer(**GO_SAFE_NORMALIZER)
     tok.pre_tokenizer = pre_tokenizers.BertPreTokenizer()
     tr = trainers.WordPieceTrainer(vocab_size=vocab_size, special_tokens=["[PAD]", "[UNK]", "[CLS]", "[SEP]", "[MASK]"])
     tok.train_from_iterator(texts, tr)
@@ -88,19 +113,55 @@ def evaluate(model, loader, device):
     return np.array(probs), np.array(labels), np.array(types)
 
 
-def choose_thresholds(probs, labels, types, retain=0.99, cap=0.5, min_n=30):
+def _quantile_threshold(s, retain, cap):
+    # same rule as eval.ChooseThresholds in Go: k-th smallest TP score with a
+    # one-standard-deviation margin so the target holds on unseen data, capped
+    n = len(s)
+    if n == 0:
+        return cap
+    margin = math.ceil(math.sqrt(n * retain * (1 - retain)))
+    k = max(0, min(n - 1, int(math.floor((1 - retain) * n) - margin)))
+    return min(float(np.nextafter(s[k], 0)), cap)
+
+
+def choose_thresholds(probs, labels, types, retain=0.99, cap=0.5, min_n=100):
     th = {}
-    tp_all = np.sort(probs[labels == 1])
-    k = int(math.floor((1 - retain) * len(tp_all)))
-    default = min(float(np.nextafter(tp_all[min(k, len(tp_all) - 1)], 0)) if len(tp_all) else 0.5, cap)
+    default = _quantile_threshold(np.sort(probs[labels == 1]), retain, cap)
     for t in sorted(set(types)):
         s = np.sort(probs[(labels == 1) & (types == t)])
-        if len(s) >= min_n:
-            k = int(math.floor((1 - retain) * len(s)))
-            th[t] = min(float(np.nextafter(s[min(k, len(s) - 1)], 0)), cap)
-        else:
-            th[t] = default
+        th[t] = _quantile_threshold(s, retain, cap) if len(s) >= min_n else default
     return th, default
+
+
+def ort_session(path, threads=1):
+    import onnxruntime as ort
+    so = ort.SessionOptions()
+    so.intra_op_num_threads = threads
+    return ort.InferenceSession(path, so, providers=["CPUExecutionProvider"])
+
+
+def ort_probs(sess, tok, texts, inputs, max_len, batch=64):
+    """P(label=1) from an ONNX session — the int8 model that ships, not the torch one."""
+    out = []
+    for i in range(0, len(texts), batch):
+        enc = tok(list(texts[i:i + batch]), truncation=True, max_length=max_len, padding=True, return_tensors="np")
+        feed = {k: enc[k].astype(np.int64) for k in inputs}
+        logits = sess.run(["logits"], feed)[0]
+        if logits.shape[-1] == 1:
+            p = 1 / (1 + np.exp(-logits[:, 0]))
+        else:
+            z = logits[:, 1] - logits[:, 0]
+            p = 1 / (1 + np.exp(-z))
+        out.extend(p.tolist())
+    return np.array(out)
+
+
+def file_sha256(path):
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()[:16]
 
 
 def summarize(probs, labels, types, th, default):
@@ -148,7 +209,16 @@ def main():
     else:
         tok = AutoTokenizer.from_pretrained(args.base)
         model = AutoModelForSequenceClassification.from_pretrained(args.base, num_labels=2)
-        tok.backend_tokenizer.save(os.path.join(args.out, "tokenizer.json"))
+        from tokenizers import normalizers
+        bt = tok.backend_tokenizer
+        current = json.loads(bt.to_str()).get("normalizer") or {}
+        if current.get("type") == "BertNormalizer":
+            bt.normalizer = normalizers.BertNormalizer(**GO_SAFE_NORMALIZER)  # before training, so both sides agree
+        else:
+            print(f"WARNING: tokenizer normalizer is {current.get('type')!r}, not BertNormalizer; the Go runtime lowercases and strips "
+                  f"accents before tokenising, so a cased or SentencePiece tokenizer will not match. Use an uncased WordPiece base "
+                  f"(MiniLM/BERT-uncased) or verify reference.json carefully.", file=sys.stderr)
+        bt.save(os.path.join(args.out, "tokenizer.json"))
         base_desc = args.base
     model.to(device)
     nparams = sum(p.numel() for p in model.parameters())
@@ -174,35 +244,50 @@ def main():
                 if step % 200 == 0:
                     print(f"epoch {ep} step {step}/{steps} loss {out.loss.item():.4f} {time.time()-t0:.0f}s", flush=True)
         metrics["train_seconds"] = time.time() - t0
-        dev_dl = DataLoader(Windows(dev_rows, tok, args.max_len), batch_size=128, collate_fn=collate(tok, args.max_len))
-        test_dl = DataLoader(Windows(test_rows, tok, args.max_len), batch_size=128, collate_fn=collate(tok, args.max_len))
-        p, y, t = evaluate(model, dev_dl, device)
-        th, default = choose_thresholds(p, y, t)
-        metrics["dev"] = summarize(p, y, t, th, default)
-        p, y, t = evaluate(model, test_dl, device)
-        metrics["test"] = summarize(p, y, t, th, default)
-        print("dev", metrics["dev"], "\ntest", metrics["test"])
-    else:
-        th, default = {}, 0.5
 
-    # export
+    # export; the graph, not the tokenizer, decides which inputs exist (an
+    # exporter prunes token_type_ids when the model ignores them)
     model.eval()
     enc = tok(["aadhaar | - | aadhar « 738192045614 » , bank acc 509347182063"], return_tensors="pt")
-    inputs = ["input_ids", "attention_mask"] + (["token_type_ids"] if "token_type_ids" in enc else [])
+    tok_inputs = ["input_ids", "attention_mask"] + (["token_type_ids"] if "token_type_ids" in enc else [])
     onnx_path = os.path.join(args.out, "model.onnx")
-    torch.onnx.export(model, tuple(enc[k] for k in inputs), onnx_path, input_names=inputs, output_names=["logits"],
-                      dynamic_axes={**{k: {0: "batch", 1: "seq"} for k in inputs}, "logits": {0: "batch"}}, opset_version=17, dynamo=False)
+    torch.onnx.export(model, tuple(enc[k] for k in tok_inputs), onnx_path, input_names=tok_inputs, output_names=["logits"],
+                      dynamic_axes={**{k: {0: "batch", 1: "seq"} for k in tok_inputs}, "logits": {0: "batch"}}, opset_version=17, dynamo=False)
+    import onnx as onnx_lib
+    inputs = [i.name for i in onnx_lib.load(onnx_path).graph.input]
+    if inputs != tok_inputs:
+        print(f"note: exported graph takes {inputs} (tokenizer produced {tok_inputs}); the manifest records the graph's inputs")
     from onnxruntime.quantization import quantize_dynamic, QuantType
     int8_path = os.path.join(args.out, "model.int8.onnx")
     quantize_dynamic(onnx_path, int8_path, weight_type=QuantType.QInt8)
     metrics["onnx_bytes"] = os.path.getsize(onnx_path)
     metrics["int8_bytes"] = os.path.getsize(int8_path)
 
-    # python-side latency for reference (Go numbers come from piieval -onnx)
-    import onnxruntime as ort
+    # evaluate and choose thresholds through the int8 ONNX session that ships
+    sess8 = ort_session(int8_path, threads=args.threads)
+    if not args.no_train:
+        p, y, t = ort_probs(sess8, tok, [r["text"] for r in dev_rows], inputs, args.max_len), np.array([r["label"] for r in dev_rows]), np.array([r["type"] for r in dev_rows])
+        th, default = choose_thresholds(p, y, t)
+        metrics["dev"] = summarize(p, y, t, th, default)
+        p, y, t = ort_probs(sess8, tok, [r["text"] for r in test_rows], inputs, args.max_len), np.array([r["label"] for r in test_rows]), np.array([r["type"] for r in test_rows])
+        metrics["test"] = summarize(p, y, t, th, default)
+        metrics["eval_model"] = "model.int8.onnx via onnxruntime"
+        print("dev (int8)", metrics["dev"], "\ntest (int8)", metrics["test"])
+    else:
+        th, default = {}, 0.5
+
+    # parity references for the Go runtime: real windows plus adversarial strings
+    ref_texts = [r["text"] for r in dev_rows[:32]] + [clean_input(a) for a in ADVERSARIAL]
+    refs = []
+    for text in ref_texts:
+        enc_r = tok([text], truncation=True, max_length=args.max_len, return_tensors="np")
+        p = float(ort_probs(sess8, tok, [text], inputs, args.max_len)[0])
+        refs.append({"text": text, "ids": enc_r["input_ids"][0].tolist(), "p": p})
+    json.dump(refs, open(os.path.join(args.out, "reference.json"), "w"), indent=1)
+
+    # python-side latency for reference (Go numbers come from piibench)
     for name, path in [("fp32", onnx_path), ("int8", int8_path)]:
-        so = ort.SessionOptions(); so.intra_op_num_threads = 1
-        sess = ort.InferenceSession(path, so, providers=["CPUExecutionProvider"])
+        sess = ort_session(path, threads=1)
         feed = {k: enc[k].numpy() for k in inputs}
         for _ in range(5):
             sess.run(["logits"], feed)
@@ -211,7 +296,10 @@ def main():
             sess.run(["logits"], feed)
         metrics[f"py_latency_ms_{name}_1thread"] = (time.time() - t0) / n * 1000
     json.dump({"version": time.strftime("%Y%m%dT%H%M%SZ", time.gmtime()), "base": base_desc, "max_len": args.max_len, "inputs": inputs,
-               "thresholds": th, "default_threshold": default, "model_file": "model.int8.onnx", "params": nparams},
+               "thresholds": th, "default_threshold": default, "model_file": "model.int8.onnx", "params": nparams,
+               "normalizer": "BertNormalizer" + json.dumps(GO_SAFE_NORMALIZER, sort_keys=True),
+               "training_data": f"train_ungated.jsonl sha256:{file_sha256(os.path.join(args.data, 'train_ungated.jsonl'))}",
+               "thresholds_from": "model.int8.onnx on dev_gated, retention target 0.99 with margin, cap 0.5"},
               open(os.path.join(args.out, "manifest.json"), "w"), indent=1)
     json.dump(metrics, open(os.path.join(args.out, "metrics.json"), "w"), indent=1)
     print(json.dumps(metrics, indent=1))

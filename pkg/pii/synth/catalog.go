@@ -4,7 +4,9 @@ import (
 	"fmt"
 	"hash/fnv"
 	"math/rand"
+	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/techiek77-ui/poc1/pkg/pii"
@@ -16,18 +18,31 @@ import (
 type Field struct {
 	Kind   string         // matches labels.Kind where one exists
 	Type   pii.EntityType // "" for non-PII
-	Labels []string       // label variants; pooled into train-only / test-only / shared by hash
+	Labels []string       // label variants; pooled per field over normalised forms (see LabelPool)
 	Gen    func(r *rand.Rand, p *Person) string
 	Weight int // relative frequency when sampling distractors / extra fields
+
+	poolOnce sync.Once
+	pools    map[string]string
 }
 
-// Pool returns "train", "dev", "test" or "" (shared) for a label or template
-// string. It is a deterministic hash so the split is reproducible, so that
-// dev contains phrasings never seen in training (thresholds are chosen on
-// them) and test contains phrasings seen in neither train nor dev.
+// Norm reduces a label or template to the word sequence every verifier sees:
+// "Aadhaar No.", "aadhaar_no" and "AADHAAR NO" are the same phrasing, so they
+// must share a pool or the held-out split would leak through punctuation.
+func Norm(s string) string {
+	toks := labels.Tokenize(s)
+	words := make([]string, len(toks))
+	for i, t := range toks {
+		words[i] = t.Text
+	}
+	return strings.Join(words, " ")
+}
+
+// Pool returns "train", "dev", "test" or "" (shared) for a template string,
+// by a deterministic hash of its normalised form.
 func Pool(s string) string {
 	h := fnv.New32a()
-	h.Write([]byte(s))
+	h.Write([]byte(Norm(s)))
 	switch h.Sum32() % 10 {
 	case 0, 1:
 		return "test"
@@ -40,13 +55,14 @@ func Pool(s string) string {
 	}
 }
 
-// allowed reports whether a pooled string may be used for a split.
+// allowed reports whether a pooled template may be used for a split.
 func allowed(s, split string) bool {
 	p := Pool(s)
 	return p == "" || p == split
 }
 
-// pickPooled chooses one of xs allowed for split.
+// pickPooled chooses one of xs allowed for split; it fails loudly rather than
+// leaking a wrong-pool phrasing when none is allowed.
 func pickPooled(r *rand.Rand, xs []string, split string) string {
 	for tries := 0; tries < 20; tries++ {
 		s := xs[r.Intn(len(xs))]
@@ -54,12 +70,62 @@ func pickPooled(r *rand.Rand, xs []string, split string) string {
 			return s
 		}
 	}
-	for _, s := range xs { // fall back to the first allowed
+	for _, s := range xs {
 		if allowed(s, split) {
 			return s
 		}
 	}
-	return xs[0]
+	panic(fmt.Sprintf("no template allowed for split %q in a list of %d", split, len(xs)))
+}
+
+// LabelPool returns the pool of one label of a field. Labels are pooled per
+// field over their distinct normalised forms, sorted, in a fixed rotation
+// (test, dev, train-only, shared, shared), which guarantees every field with
+// at least five distinct phrasings has a held-out phrasing for dev and for
+// test; punctuation/case variants of one phrasing share a pool.
+func LabelPool(f *Field, label string) string {
+	f.poolOnce.Do(func() {
+		seen := map[string]bool{}
+		var forms []string
+		for _, l := range f.Labels {
+			n := Norm(l)
+			if !seen[n] {
+				seen[n] = true
+				forms = append(forms, n)
+			}
+		}
+		sort.Strings(forms)
+		f.pools = map[string]string{}
+		for i, n := range forms {
+			switch i % 5 {
+			case 0:
+				f.pools[n] = "test"
+			case 1:
+				f.pools[n] = "dev"
+			case 2:
+				f.pools[n] = "train"
+			default:
+				f.pools[n] = ""
+			}
+		}
+	})
+	return f.pools[Norm(label)]
+}
+
+// pickLabel chooses a label of f allowed for split.
+func pickLabel(r *rand.Rand, f *Field, split string) string {
+	for tries := 0; tries < 20; tries++ {
+		l := f.Labels[r.Intn(len(f.Labels))]
+		if p := LabelPool(f, l); p == "" || p == split {
+			return l
+		}
+	}
+	for _, l := range f.Labels {
+		if p := LabelPool(f, l); p == "" || p == split {
+			return l
+		}
+	}
+	panic(fmt.Sprintf("field %s has no label allowed for split %q", f.Kind, split))
 }
 
 func withVerhoeffShare(r *rand.Rand, d string) string {
@@ -87,11 +153,11 @@ var Fields = []*Field{
 			"Aadhaar Num", "Aadhaar number (12 digit)", "Aadhaar No (as per card)", "Unique Identification Number", "AADHAAR", "Aadhaar Card",
 			"Aadhar card no", "Customer Aadhaar", "Applicant Aadhaar No", "Aadhaar of applicant", "aadhaar_no", "aadhaarNumber", "aadhar_number", "uid_no", "AadhaarNo"}},
 	{Kind: "aadhaar_masked", Type: "", Weight: 2, Gen: func(r *rand.Rand, p *Person) string { return p.maskedAadhaar(r) },
-		Labels: []string{"Aadhaar Number", "Aadhaar No", "Aadhaar", "Aadhar No", "UID", "Masked Aadhaar", "Aadhaar (masked)", "aadhaar_no", "Aadhaar No (last 4)"}},
+		Labels: []string{"Aadhaar Number", "Aadhaar No", "Aadhaar", "Aadhar No", "UID", "Masked Aadhaar", "Aadhaar (masked)", "aadhaar_no", "Aadhaar No (last 4)", "Aadhaar ending"}},
 	{Kind: "vid", Type: pii.VID, Weight: 1, Gen: func(r *rand.Rand, p *Person) string {
 		return groupDigits(p.VID, pick(r, []string{" ", "", " ", "-"}), 4)
 	},
-		Labels: []string{"VID", "Virtual ID", "Aadhaar VID", "VID No", "virtual_id", "Virtual Identification Number"}},
+		Labels: []string{"VID", "Virtual ID", "Aadhaar VID", "VID No", "virtual_id", "Virtual Identification Number", "16-digit VID", "Aadhaar Virtual ID"}},
 	{Kind: "pan", Type: pii.PAN, Weight: 6, Gen: func(r *rand.Rand, p *Person) string { return p.PAN },
 		Labels: []string{"PAN", "PAN No", "PAN No.", "PAN Number", "PAN Card No", "PAN Card Number", "Permanent Account Number", "PAN Card", "pan_no", "panNumber", "PAN of applicant", "Income Tax PAN", "PAN (10 char)", "PAN ID"}},
 	{Kind: "gstin", Type: pii.GSTIN, Weight: 3, Gen: func(r *rand.Rand, p *Person) string { return p.GSTIN },
@@ -101,11 +167,11 @@ var Fields = []*Field{
 	{Kind: "voter_id", Type: pii.VoterID, Weight: 2, Gen: func(r *rand.Rand, p *Person) string { return p.Voter },
 		Labels: []string{"Voter ID", "Voter ID No", "Voter ID Number", "EPIC No", "EPIC Number", "Voter Card No", "Election Card No", "voter_id", "epicNo", "Voter Id Card Number"}},
 	{Kind: "passport", Type: pii.Passport, Weight: 2, Gen: func(r *rand.Rand, p *Person) string { return p.Passport },
-		Labels: []string{"Passport No", "Passport Number", "Passport No.", "Passport", "passport_no", "passportNumber", "Passport #", "PPT No"}},
+		Labels: []string{"Passport No", "Passport Number", "Passport No.", "Passport", "passport_no", "passportNumber", "Passport #", "PPT No", "Indian Passport No", "Passport Number (as per MRZ)", "Passport details"}},
 	{Kind: "driving_licence", Type: pii.DrivingLicence, Weight: 2, Gen: func(r *rand.Rand, p *Person) string { return p.dlFmt(r) },
 		Labels: []string{"Driving Licence No", "Driving License Number", "DL No", "DL Number", "DL No.", "Driving Licence", "dl_no", "licenseNumber", "Licence No"}},
 	{Kind: "ifsc", Type: pii.IFSC, Weight: 4, Gen: func(r *rand.Rand, p *Person) string { return p.IFSC },
-		Labels: []string{"IFSC", "IFSC Code", "IFS Code", "IFSC code", "ifsc_code", "ifsc", "Bank IFSC", "Branch IFSC", "IFSC:"}},
+		Labels: []string{"IFSC", "IFSC Code", "IFS Code", "IFSC code", "ifsc_code", "ifsc", "Bank IFSC", "Branch IFSC", "IFSC:", "Beneficiary IFSC", "IFSC of beneficiary bank", "Branch code (IFSC)"}},
 	{Kind: "mobile", Type: pii.Mobile, Weight: 8, Gen: func(r *rand.Rand, p *Person) string { return p.mobileFmt(r) },
 		Labels: []string{"Mobile", "Mobile No", "Mobile No.", "Mobile Number", "Phone", "Phone No", "Phone Number", "Contact No", "Contact Number", "Contact", "Mob", "Mob No", "Cell", "WhatsApp No", "WhatsApp", "Registered Mobile", "RMN", "Tel", "mobile_no", "phoneNumber", "contact_number", "msisdn", "Alternate No", "Ph"}},
 	{Kind: "email", Type: pii.Email, Weight: 5, Gen: func(r *rand.Rand, p *Person) string { return p.Email },
@@ -120,7 +186,7 @@ var Fields = []*Field{
 	{Kind: "pincode", Type: pii.Pincode, Weight: 3, Gen: func(r *rand.Rand, p *Person) string { return p.Pin },
 		Labels: []string{"PIN", "PIN Code", "Pincode", "Pin Code", "Postal Code", "ZIP", "Zip Code", "pincode", "pin_code", "postalCode", "PIN:"}},
 	{Kind: "dob", Type: pii.DOB, Weight: 5, Gen: func(r *rand.Rand, p *Person) string { return p.dobFmt(r) },
-		Labels: []string{"DOB", "Date of Birth", "D.O.B", "D.O.B.", "Birth Date", "dob", "date_of_birth", "dateOfBirth", "Born on", "DoB"}},
+		Labels: []string{"DOB", "Date of Birth", "D.O.B", "D.O.B.", "Birth Date", "dob", "date_of_birth", "dateOfBirth", "Born on", "DoB", "Birthday", "Date of Birth (DD/MM/YYYY)", "Year of Birth"}},
 	{Kind: "name", Type: pii.Name, Weight: 9, Gen: func(r *rand.Rand, p *Person) string { return p.nameFmt(r) },
 		Labels: []string{"Name", "Full Name", "Customer Name", "Applicant Name", "Account Holder Name", "Holder Name", "Cardholder Name", "Beneficiary Name", "Nominee Name", "Employee Name", "Name of Applicant", "Name as per Aadhaar", "Name as per PAN", "name", "full_name", "customerName", "applicant_name", "Contact Person", "Proprietor Name", "Student Name", "Patient Name"}},
 	{Kind: "father_name", Type: pii.Name, Weight: 2, Gen: func(r *rand.Rand, p *Person) string { return p.Father },
@@ -220,11 +286,11 @@ var Fields = []*Field{
 		}
 	}, Labels: []string{"Ticket No", "Ticket Number", "Ticket ID", "Ticket #", "Case ID", "Case No", "Incident No", "Incident ID", "SR No", "SR Number", "Service Request No", "Request ID", "Req ID", "Complaint No", "Complaint Number", "Grievance ID", "ticket_id", "requestId", "caseId", "Job ID", "Batch ID", "Session ID", "Trace ID", "Correlation ID", "Message ID", "Record ID", "Seq No", "Sl No", "Sr No"}},
 	{Kind: "pran", Type: "", Weight: 2, Gen: func(r *rand.Rand, p *Person) string { return "11" + digits(r, 10) },
-		Labels: []string{"PRAN", "PRAN No", "PRAN Number", "NPS PRAN", "pran_no", "NPS Account No"}},
+		Labels: []string{"PRAN", "PRAN No", "PRAN Number", "NPS PRAN", "pran_no", "NPS Account No", "Permanent Retirement Account Number"}},
 	{Kind: "ppo", Type: "", Weight: 2, Gen: func(r *rand.Rand, p *Person) string { return withVerhoeffShare(r, digits(r, 12)) },
-		Labels: []string{"PPO No", "PPO Number", "PPO", "Pension Payment Order No", "ppo_no", "Pension No"}},
+		Labels: []string{"PPO No", "PPO Number", "PPO", "Pension Payment Order No", "ppo_no", "Pension No", "PPO Number (Pension)"}},
 	{Kind: "apaar", Type: "", Weight: 1, Gen: func(r *rand.Rand, p *Person) string { return withVerhoeffShare(r, digits(r, 12)) },
-		Labels: []string{"APAAR ID", "APAAR", "ABC ID", "apaar_id", "APAAR Number"}},
+		Labels: []string{"APAAR ID", "APAAR", "ABC ID", "apaar_id", "APAAR Number", "APAAR No", "Academic Bank of Credits ID", "Student APAAR"}},
 	{Kind: "consumer_no", Type: "", Weight: 4, Gen: func(r *rand.Rand, p *Person) string {
 		switch r.Intn(3) {
 		case 0:
@@ -255,17 +321,23 @@ var Fields = []*Field{
 	}, Labels: []string{"PNR", "PNR No", "PNR Number", "Booking ID", "Booking Ref", "Booking Reference", "Reservation No", "Confirmation No", "pnr", "bookingId"}},
 	{Kind: "timestamp", Type: "", Weight: 4, Gen: func(r *rand.Rand, p *Person) string {
 		t := baseTime.Add(-time.Duration(r.Intn(100000)) * time.Minute)
-		switch r.Intn(4) {
+		switch r.Intn(7) {
 		case 0:
 			return fmt.Sprint(t.UnixMilli())
 		case 1:
 			return fmt.Sprint(t.Unix())
 		case 2:
 			return t.Format("2006-01-02T15:04:05Z")
-		default:
+		case 3:
 			return t.Format("02/01/2006 15:04")
+		case 4: // plain dates under non-birth labels ("Valid Till 01-10-2038") look like a DOB
+			return t.AddDate(r.Intn(15), 0, 0).Format("02-01-2006")
+		case 5:
+			return t.AddDate(-r.Intn(5), 0, 0).Format("02/01/2006")
+		default:
+			return t.Format("2 Jan 2006")
 		}
-	}, Labels: []string{"Timestamp", "TS", "Epoch", "Created At", "Updated At", "Event Time", "Logged At", "created_at", "updatedAt", "ts", "Time", "Date", "Generated At", "Expires At", "Valid Till"}},
+	}, Labels: []string{"Timestamp", "TS", "Epoch", "Created At", "Updated At", "Event Time", "Logged At", "created_at", "updatedAt", "ts", "Time", "Date", "Generated At", "Expires At", "Valid Till", "Valid From", "Issue Date", "Expiry Date", "Date of Issue", "Due Date", "Invoice Date", "Txn Date"}},
 	{Kind: "amount", Type: "", Weight: 6, Gen: func(r *rand.Rand, p *Person) string {
 		v := r.Intn(5000000)
 		switch r.Intn(5) {
@@ -297,7 +369,7 @@ var Fields = []*Field{
 	{Kind: "aadhaar_eid", Type: "", Weight: 1, Gen: func(r *rand.Rand, p *Person) string {
 		return fmt.Sprintf("%04d/%05d/%05d", r.Intn(10000), r.Intn(100000), r.Intn(100000))
 	},
-		Labels: []string{"Enrolment No", "Enrolment ID", "EID", "Aadhaar Enrolment No", "Enrollment Number", "enrolment_id"}},
+		Labels: []string{"Enrolment No", "Enrolment ID", "EID", "Aadhaar Enrolment No", "Enrollment Number", "enrolment_id", "Enrolment Slip No"}},
 	{Kind: "generic_id", Type: "", Weight: 5, Gen: func(r *rand.Rand, p *Person) string {
 		switch r.Intn(4) {
 		case 0:
@@ -325,7 +397,7 @@ var Fields = []*Field{
 	{Kind: "count", Type: "", Weight: 3, Gen: func(r *rand.Rand, p *Person) string { return fmt.Sprint(r.Intn(1000000)) },
 		Labels: []string{"Count", "Total Records", "Records", "Rows", "Qty", "Quantity", "Processed", "Failed", "Pending", "Units", "Pages", "Items"}},
 	{Kind: "otp", Type: "", Weight: 3, Gen: func(r *rand.Rand, p *Person) string { return digits(r, 4+2*r.Intn(2)) },
-		Labels: []string{"OTP", "One Time Password", "Verification Code", "Code", "PIN", "MPIN", "Passcode", "Security Code", "otp"}},
+		Labels: []string{"OTP", "One Time Password", "Verification Code", "Code", "ATM PIN", "MPIN", "Passcode", "Security Code", "otp", "Transaction PIN", "UPI PIN"}},
 	{Kind: "percent", Type: "", Weight: 2, Gen: func(r *rand.Rand, p *Person) string { return fmt.Sprintf("%d.%d%%", r.Intn(100), r.Intn(10)) },
 		Labels: []string{"Interest Rate", "Rate", "ROI", "Discount", "GST Rate", "Tax Rate", "Growth", "Share"}},
 	{Kind: "dummy", Type: "", Weight: 2, Gen: func(r *rand.Rand, p *Person) string {

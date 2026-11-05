@@ -162,7 +162,7 @@ score and reason, and the model score, decision and top feature contributions.
 | `piigen` | `-n` documents, `-seed`, `-out`, `-hardneg` share of 12-digit non-Aadhaar values forced to pass Verhoeff (default 0.35) |
 | `piitrain` | `-corpus`, `-out`, `-window` (60), `-retain` TP-retention target for thresholds (0.99), `-epochs`, `-lr`, `-l2`, `-mincount`, `-posw`, `-prune` |
 | `piieval` | `-corpus` (repeatable), `-model`, `-window`, `-retain`, `-split` (test), `-real-split` (default: the model's), `-out`, `-golden` (testdata/golden.txt, '' to skip), `-dump` JSONL of every candidate with scores for error analysis, `-examples`; with `-tags onnx`: `-onnx <dir>`, `-ort <libonnxruntime.so>`. The headline "A linear" row uses the thresholds shipped in the artifact; a second row shows thresholds re-tuned on this dev split |
-| `piiscan` | `-format text|csv|json|log`, `-model`, `-window`, `-ungated` |
+| `piiscan` | `-format text|csv|json|log`, `-model`, `-window`, `-ungated`; with `-tags onnx`: `-onnx <dir>`, `-ort` (adds an ONNX score column) |
 | `piiexport` | `-corpus`, `-out`, `-window` |
 | `piibench` | `-onnx <dir>`, `-ort`, `-data`, `-n` |
 | `piiconvert` | `-in`, `-out`, `-text-field`, `-spans-field`, `-start-field`/`-end-field`/`-label-field`, `-offsets byte|rune|auto`, `-map THEIRS=OURS,…`, `-unmapped drop|nonpii` (required when unmapped labels exist), `-format`, `-split` |
@@ -260,12 +260,27 @@ python3 ml/train_tier_b.py --data data/tierb --out models/tier_b --base scratch 
 
 With network access to huggingface.co (or the files copied in), use a pretrained
 encoder instead of `--base scratch --arch tiny`, e.g.
-`--base microsoft/MiniLM-L12-H384-uncased` or `--base microsoft/deberta-v3-xsmall`.
+`--base microsoft/MiniLM-L12-H384-uncased` or `--base sentence-transformers/all-MiniLM-L6-v2`
+(uncased WordPiece tokenizers; the script rewrites their normalizer to the explicit
+settings the Go tokenizer implements, and the Go runtime applies the same
+normalisation before tokenising). Cased or SentencePiece tokenizers (e.g. DeBERTa-v3)
+are not supported by the Go path as configured — the script warns.
 The script writes `tokenizer.json`, `model.onnx`, `model.int8.onnx`, `manifest.json`
-(inputs, max length, per-type thresholds) and `metrics.json`.
+(inputs *as exported in the graph*, max length, per-type thresholds chosen on the int8
+model, training-data hash) and `metrics.json`, plus `reference.json`: token ids and
+probabilities for 32 dev windows and a set of adversarial strings (Devanagari, accents,
+`İ`/`ẞ`, literal `[SEP]`, 128-token truncation, empty input) that
+`go test -tags onnx ./pkg/pii/onnx` checks the Go runtime against — the test fails,
+not skips, when `PII_ONNX_DIR` is set and the reference is missing. At load time the Go
+runtime refuses a manifest whose inputs differ from the graph's, and a verifier that
+errors scores 0.5 and is counted (`piieval` prints a warning instead of a flattering row).
 
 ```bash
 PII_ORT_LIB=/path/to/libonnxruntime.so go run -tags onnx ./cmd/piieval -onnx models/tier_b
+```
+
+```bash
+echo 'aadhar 738192045614, bank acc 509347182063' | PII_ORT_LIB=/path/to/libonnxruntime.so go run -tags onnx ./cmd/piiscan -onnx models/tier_b
 ```
 
 ```bash
@@ -291,7 +306,7 @@ execution provider.
 |---|---|---|
 | Rules | none | the attribution + competing-label logic is most of the win and must exist anyway as the safety floor; zero deployment cost |
 | Tier A | **logistic regression over sparse context features**, trained and served in pure Go | the task is a binary decision from a 120-character window with strong, nameable signals; Saha et al. and GitHub's experience show small models are competitive here; it is explainable per decision, needs no CGO, trains in 10 s, and fits endpoints. Gradient-boosted trees would be the next step if interactions beyond the hand-written conjunctions mattered (LightGBM models run in pure Go via `leaves`). |
-| Tier B | **small pretrained transformer fine-tuned as a sequence classifier** (recommended: `microsoft/MiniLM-L12-H384-uncased` 33 M, `sentence-transformers/all-MiniLM-L6-v2` 22 M, or `microsoft/deberta-v3-xsmall` 22 M backbone; int8 via ONNX Runtime) | captures paraphrase and OCR noise without feature engineering, and generalises beyond the generator's wording — the kind of model GitHub settled on for its secret-scanning verifier. Served through ONNX Runtime because that is the one runtime that ships as a single `.so`/`.dll`/`.dylib` for Go, Java and .NET alike. Here only a from-scratch BERT-tiny (5.4 M) could be trained because huggingface.co is not reachable from the sandbox; the pipeline is identical for a pretrained base. |
+| Tier B | **small pretrained transformer fine-tuned as a sequence classifier** (recommended: `microsoft/MiniLM-L12-H384-uncased` 33 M or `sentence-transformers/all-MiniLM-L6-v2` 22 M — uncased WordPiece, which the Go tokenizer path matches; int8 via ONNX Runtime) | captures paraphrase and OCR noise without feature engineering, and generalises beyond the generator's wording — the kind of model GitHub settled on for its secret-scanning verifier. Served through ONNX Runtime because that is the one runtime that ships as a single `.so`/`.dll`/`.dylib` for Go, Java and .NET alike. Here only a from-scratch BERT-tiny (5.4 M) could be trained because huggingface.co is not reachable from the sandbox; the pipeline is identical for a pretrained base. |
 | Names / addresses (planned) | **token-classification NER** fine-tuned from the same small encoders (PERSON, ADDRESS; optionally ORG), served through `pkg/pii/onnx` | regexes cannot find names; the gazetteer baseline is the fallback for endpoints without the ONNX runtime. Candidate open models to start from: GLiNER-small / GLiNER2-PII (zero-shot, Apache 2.0), ai4privacy ModernBERT anonymiser (MIT), or an IndicBERT/MuRIL base if Indian-language names matter later. |
 
 Not chosen: an LLM verifier (local-only requirement, endpoint CPUs, prompt-injection exposure when reading scanned text); a from-scratch deep model as the production classifier (no pretrained knowledge, learns the generator).
@@ -362,11 +377,11 @@ Linux endpoints: `onnxruntime-linux-x64-1.31.1.tgz` (glibc) — for musl/Alpine 
 | component | Linux pod (x64/arm64) | Linux endpoint | Windows endpoint | macOS endpoint |
 |---|---|---|---|---|
 | Rules + Tier A (`go build`, no tag) | static binary, distroless image (`Dockerfile`) | static binary | static `.exe` | static binary, amd64 + arm64 |
-| Tier B (`-tags onnx`) | glibc image (`Dockerfile --build-arg ONNX=1`) + `libonnxruntime.so`; GPU pods: `-gpu` release + CUDA, `PII_ORT_EP=cuda` | `libonnxruntime.so` next to the binary, CGO build | `onnxruntime.dll`, CGO (MinGW) build | `libonnxruntime.dylib`, CGO build on a Mac runner, codesign, `PII_ORT_EP=coreml` optional |
+| Tier B (`-tags onnx`) | glibc image (`docker build --build-arg ONNX=1 --build-arg RUNTIME=runtime-onnx`) + `libonnxruntime.so`; entrypoint runs `piiscan -onnx /models/tier_b`; GPU pods: `-gpu` release + CUDA, `PII_ORT_EP=cuda` | `libonnxruntime.so` next to the binary, CGO build | `onnxruntime.dll`, CGO (MinGW) build | `libonnxruntime.dylib`, CGO build on a Mac runner, codesign, `PII_ORT_EP=coreml` optional |
 | NER (planned) | same as Tier B | same as Tier B; 4-layer models for low-volume devices | same | same |
 | Model updates | file push (`tier_a_lr.json`, `models/tier_b/*`) | same | same | same |
 
-Verified here with `scripts/crossbuild.sh`: the pure-Go scanner builds for linux/amd64, linux/arm64, windows/amd64, darwin/amd64 and darwin/arm64 with `CGO_ENABLED=0` (2.4–2.6 MB each, no shared-library dependencies); the ONNX-enabled binary builds on Linux with CGO (7.4 MB + the 28 MB runtime library). Alpine/musl pods: the pure-Go image is static and fine; for Tier B use a glibc base image (as in the `Dockerfile`) because the official ONNX Runtime binaries are glibc builds. Memory: Tier A ~25 MB; a MiniLM-6 int8 session ~150–250 MB.
+Verified here with `scripts/crossbuild.sh`: the pure-Go scanner builds for linux/amd64, linux/arm64, windows/amd64, darwin/amd64 and darwin/arm64 with `CGO_ENABLED=0` (2.4–2.6 MB each, no shared-library dependencies); `piiscan`/`piibench` with `-tags onnx` build on Linux with CGO (≈7 MB + the 28 MB runtime library). Alpine/musl pods: the pure-Go image is static and fine; for Tier B use a glibc base image (as in the `Dockerfile`) because the official ONNX Runtime binaries are glibc builds. Memory: Tier A ~25 MB; a MiniLM-6 int8 session ~150–250 MB.
 
 ## 9. Integrating with the product
 

@@ -109,6 +109,7 @@ type NameInfo struct {
 	HasComma   bool
 	SpanLength int
 	NextWord   string // lowercase word right after the span ("road" after a person's name)
+	PlaceWord  bool   // the span ends in a street/building/city/state word ("Sudha Estate", "Kavita Sharma Road")
 }
 
 var (
@@ -238,6 +239,12 @@ func Analyze(v *detect.DocView, c *pii.Candidate, window int) *Analysis {
 		for _, h := range labels.Find(col) {
 			a.HeaderKinds = append(a.HeaderKinds, h.Kind)
 			a.Labels = append(a.Labels, LabelRef{Hit: h, Side: Key})
+		}
+	} else if hdr, ok := tableLabel(text, c); ok {
+		a.Header = hdr
+		for _, h := range labels.Find(hdr) {
+			a.HeaderKinds = append(a.HeaderKinds, h.Kind)
+			a.Labels = append(a.Labels, LabelRef{Hit: h, Side: Header})
 		}
 	}
 
@@ -633,5 +640,110 @@ func nameInfo(text string, c *pii.Candidate) *NameInfo {
 	if toks := labels.Tokenize(text[c.End:min(len(text), c.End+20)]); len(toks) > 0 && toks[0].Start <= 2 {
 		ni.NextWord = toks[0].Text
 	}
+	if len(words) > 0 {
+		last := strings.ToLower(strings.Trim(words[len(words)-1], ".,"))
+		ni.PlaceWord = placeWords[last] || gazetteer.IsCity(words[len(words)-1]) || gazetteer.IsState(words[len(words)-1]) || placeWords[ni.NextWord]
+	}
 	return ni
+}
+
+var placeWords = func() map[string]bool {
+	m := map[string]bool{}
+	for _, list := range [][]string{gazetteer.StreetWords, gazetteer.BuildingWords} {
+		for _, w := range list {
+			for _, part := range strings.Fields(strings.ToLower(w)) {
+				m[part] = true
+			}
+		}
+	}
+	return m
+}()
+
+// tableLabel finds the header cell above a value in whitespace-, tab- or
+// pipe-aligned text (a row of labels followed by a row of values), the plain
+// text cousin of a CSV header.
+func tableLabel(text string, c *pii.Candidate) (string, bool) {
+	ls := strings.LastIndexAny(text[:c.Start], "\n\r") + 1
+	if ls == 0 {
+		return "", false
+	}
+	le := c.End + strings.IndexAny(text[c.End:]+"\n", "\n\r")
+	pe := ls - 1
+	for pe > 0 && (text[pe-1] == '\n' || text[pe-1] == '\r') {
+		pe--
+	}
+	ps := strings.LastIndexAny(text[:pe], "\n\r") + 1
+	prev, cur := text[ps:pe], text[ls:le]
+	if strings.TrimSpace(prev) == "" {
+		return "", false
+	}
+	for _, sep := range []*regexp.Regexp{tabSep, pipeSep, spaceSep} {
+		pc, cc := splitCells(prev, sep), splitCells(cur, sep)
+		if len(pc) < 2 || len(cc) < 2 {
+			continue
+		}
+		idx := -1
+		off := c.Start - ls
+		for i, cell := range cc {
+			if off >= cell.start && off < cell.end {
+				idx = i
+			}
+		}
+		if idx < 0 {
+			continue
+		}
+		best := -1
+		if len(pc) == len(cc) {
+			best = idx
+		} else {
+			bd := 1 << 30
+			for i, cell := range pc {
+				if d := abs(cell.start - cc[idx].start); d < bd {
+					bd, best = d, i
+				}
+			}
+			if bd > 6 {
+				best = -1
+			}
+		}
+		if best < 0 {
+			continue
+		}
+		hdr := strings.TrimSpace(prev[pc[best].start:pc[best].end])
+		if hdr != "" && len(labels.Find(hdr)) > 0 {
+			return hdr, true
+		}
+		return "", false
+	}
+	return "", false
+}
+
+var (
+	tabSep   = regexp.MustCompile(`\t+`)
+	pipeSep  = regexp.MustCompile(` *\| *`)
+	spaceSep = regexp.MustCompile(` {2,}`)
+)
+
+type cellSpan struct{ start, end int }
+
+func splitCells(line string, sep *regexp.Regexp) []cellSpan {
+	var cells []cellSpan
+	prev := 0
+	for _, loc := range sep.FindAllStringIndex(line, -1) {
+		if loc[0] > prev {
+			cells = append(cells, cellSpan{prev, loc[0]})
+		}
+		prev = loc[1]
+	}
+	if prev < len(line) {
+		cells = append(cells, cellSpan{prev, len(line)})
+	}
+	return cells
+}
+
+func abs(x int) int {
+	if x < 0 {
+		return -x
+	}
+	return x
 }

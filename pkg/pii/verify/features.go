@@ -190,6 +190,13 @@ func Features(c *pii.Candidate, a *attrib.Analysis) []string {
 		if s.VerhoeffOK {
 			addT("verhoeff")
 		}
+		if s.Dummy() {
+			addT("dummy")
+		}
+		if s.RepeatGroup {
+			addT("repgroup")
+		}
+		addT("seqrun=" + bucket(s.SeqRun))
 	} else {
 		addT("nonnumeric")
 	}
@@ -269,6 +276,9 @@ func Features(c *pii.Candidate, a *attrib.Analysis) []string {
 		addT("spanlen=" + bucket(ni.SpanLength/8))
 		if ni.NextWord != "" {
 			addT("next=" + ni.NextWord)
+		}
+		if ni.PlaceWord {
+			addT("placeword")
 		}
 	}
 	return f

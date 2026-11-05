@@ -1,6 +1,7 @@
 package synth
 
 import (
+	"math/rand"
 	"strings"
 	"testing"
 
@@ -9,15 +10,23 @@ import (
 )
 
 func TestGenerateIsDeterministicAndAligned(t *testing.T) {
-	a := Generate(Options{N: 300, Seed: 3})
-	b := Generate(Options{N: 300, Seed: 3})
+	a := Generate(Options{N: 800, Seed: 3})
+	b := Generate(Options{N: 800, Seed: 3})
 	if len(a) != len(b) {
 		t.Fatal("length mismatch")
 	}
 	shapes := map[string]int{}
 	for i := range a {
-		if a[i].Text != b[i].Text {
+		if a[i].Text != b[i].Text || len(a[i].Truth) != len(b[i].Truth) {
 			t.Fatalf("doc %d differs between runs", i)
+		}
+		for j := range a[i].Truth {
+			if a[i].Truth[j] != b[i].Truth[j] {
+				t.Fatalf("doc %d span %d differs between runs", i, j)
+			}
+		}
+		if !a[i].Nested {
+			t.Fatalf("doc %d: generated documents label nested PII", i)
 		}
 		shapes[a[i].Shape]++
 		for _, s := range a[i].Truth {
@@ -39,30 +48,127 @@ func TestGenerateIsDeterministicAndAligned(t *testing.T) {
 			}
 		}
 	}
-	for _, s := range []string{"prose", "form", "csv", "json", "log", "code", "ocr"} {
+	for _, s := range []string{"prose", "form", "csv", "json", "log", "code", "ocr", "card"} {
 		if shapes[s] == 0 {
 			t.Errorf("shape %s never generated", s)
 		}
 	}
 }
 
-func TestPoolsAreDisjoint(t *testing.T) {
-	seenTrain, seenTest := map[string]bool{}, map[string]bool{}
-	for _, l := range Fields[0].Labels {
-		switch Pool(l) {
-		case "train":
-			seenTrain[l] = true
-		case "test":
-			seenTest[l] = true
+// Every field must have a label allowed in every split, and every PII field a
+// phrasing held out for dev and one held out for test (by normalised form, so
+// "Aadhaar No." cannot stand in for "aadhaar_no").
+func TestLabelPoolCoverage(t *testing.T) {
+	for _, f := range Fields {
+		allowed := map[string]int{}
+		heldOut := map[string]int{}
+		for _, l := range f.Labels {
+			p := LabelPool(f, l)
+			for _, sp := range []string{"train", "dev", "test"} {
+				if p == "" || p == sp {
+					allowed[sp]++
+				}
+			}
+			if p == "dev" || p == "test" {
+				heldOut[p]++
+			}
+		}
+		for _, sp := range []string{"train", "dev", "test"} {
+			if allowed[sp] == 0 {
+				t.Errorf("field %s: no label allowed for split %s", f.Kind, sp)
+			}
+		}
+		if f.Type != "" && (heldOut["dev"] == 0 || heldOut["test"] == 0) {
+			t.Errorf("field %s: needs a held-out phrasing for dev and test (have dev=%d test=%d of %d labels)", f.Kind, heldOut["dev"], heldOut["test"], len(f.Labels))
 		}
 	}
-	for l := range seenTrain {
-		if seenTest[l] {
-			t.Fatalf("%q in both pools", l)
+	if Norm("Aadhaar No.") != Norm("aadhaar_no") || Norm("Aadhaar No.") != Norm("AADHAAR NO") {
+		t.Fatal("normalisation must fold case and punctuation")
+	}
+	for _, list := range [][]string{prose1, prose2, prose3, hardLayouts2, hardLayouts3, keywordOnly, filler, mobileCtx, logMessages, subjects, emailOpeners, emailClosers} {
+		for _, sp := range []string{"train", "dev", "test"} {
+			ok := 0
+			for _, s := range list {
+				if allowed(s, sp) {
+					ok++
+				}
+			}
+			if ok == 0 {
+				t.Errorf("a template list has nothing allowed for %s", sp)
+			}
 		}
 	}
-	if len(seenTest) == 0 {
-		t.Log("warning: no test-only Aadhaar labels; held-out phrasing coverage comes from templates")
+}
+
+// Spans must be exactly the text written for them before OCR noise, and the
+// OCR image of it afterwards (allowed substitutions only).
+func TestSpansMatchValues(t *testing.T) {
+	strip := func(s string) string {
+		return strings.Map(func(r rune) rune {
+			if r == ' ' || r == ':' || r == ',' || r == '.' || r == ';' {
+				return -1
+			}
+			return r
+		}, s)
+	}
+	shapes := []string{"prose", "form", "card", "csv", "log", "json", "code"}
+	checked := 0
+	for seed := int64(0); seed < 1500; seed++ {
+		r := rand.New(rand.NewSource(seed))
+		shape := shapes[seed%int64(len(shapes))]
+		c := &ctx{r: r, split: "train", p: NewPerson(r), b: &Builder{}, shape: shape}
+		switch shape {
+		case "prose":
+			c.prose()
+		case "form":
+			c.form()
+		case "card":
+			c.card()
+		case "csv":
+			c.csv()
+		case "log":
+			c.logDoc()
+		case "json":
+			c.jsonDoc()
+		default:
+			c.code()
+		}
+		text, truth, vals := c.b.sb.String(), c.b.truth, c.b.vals
+		if len(truth) != len(vals) {
+			t.Fatalf("seed %d: %d spans but %d values", seed, len(truth), len(vals))
+		}
+		for i, ts := range truth {
+			if got := text[ts.Start:ts.End]; got != vals[i] {
+				t.Fatalf("seed %d %s: span %q != value %q", seed, shape, got, vals[i])
+			}
+		}
+		noised, nt := ocrNoise(r, text, truth, 0.03, 0.008)
+		for i := range truth {
+			o, n := strip(vals[i]), strip(noised[nt[i].Start:nt[i].End])
+			ok := len(o) == len(n)
+			for k := 0; ok && k < len(o); k++ {
+				if o[k] == n[k] {
+					continue
+				}
+				found := false
+				for _, b := range ocrSub[o[k]] {
+					if b == n[k] {
+						found = true
+					}
+				}
+				ok = found
+			}
+			if v := noised[nt[i].Start:nt[i].End]; v == "" || strings.TrimSpace(v) != v {
+				ok = false
+			}
+			if !ok {
+				t.Fatalf("seed %d %s: OCR span %q is not the image of %q", seed, shape, noised[nt[i].Start:nt[i].End], vals[i])
+			}
+			checked++
+		}
+	}
+	if checked < 10000 {
+		t.Fatalf("only %d spans checked", checked)
 	}
 }
 

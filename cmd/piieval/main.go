@@ -41,16 +41,6 @@ func main() {
 	if len(corpora) == 0 {
 		corpora = corpus.Paths{"data/corpus.jsonl"}
 	}
-	docs, err := corpus.LoadAll(corpora)
-	if err != nil {
-		fail(err)
-	}
-	if err := corpus.AssignSplits(docs, *realSplit); err != nil {
-		fail(err)
-	}
-	dev, test := corpus.Split(docs, "dev"), corpus.Split(docs, *split)
-	corpusPath := new(string)
-	*corpusPath = corpora.String()
 	m, err := verify.Load(*modelPath)
 	if err != nil {
 		fail(err)
@@ -70,6 +60,16 @@ func main() {
 			trainedOn = append(trainedOn, filepath.Base(p))
 		}
 	}
+	docs, err := corpus.LoadAll(corpora)
+	if err != nil {
+		fail(err)
+	}
+	if err := corpus.AssignSplits(docs, *realSplit); err != nil {
+		fail(err)
+	}
+	dev, test := corpus.Split(docs, "dev"), corpus.Split(docs, *split)
+	corpusPath := new(string)
+	*corpusPath = corpora.String()
 	gated := detect.New(detect.Options{Window: *window, RequireKeyword: true})
 	ungated := detect.New(detect.Options{Window: *window, RequireKeyword: false})
 
@@ -91,13 +91,13 @@ func main() {
 	rulesDev, _, _ := eval.Scores(devItems, rules)
 	rulesTest, _, rulesDur := eval.Scores(testItems, rules)
 	cfgRules := eval.Config{Name: "1 rules @0.5", Scores: rulesTest, Default: 0.5}
-	thR, defR := eval.ChooseThresholds(devItems, rulesDev, *retain, 30)
+	thR, defR := eval.ChooseThresholds(devItems, rulesDev, *retain, 100)
 	cfgRulesT := eval.Config{Name: fmt.Sprintf("1 rules @%.0f%%", 100**retain), Scores: rulesTest, Thresholds: thR, Default: defR}
 
 	lin := &verify.Linear{M: m}
 	linDev, _, _ := eval.Scores(devItems, lin)
 	linTest, linReasons, linDur := eval.Scores(testItems, lin)
-	thL, defL := eval.ChooseThresholds(devItems, linDev, *retain, 30)
+	thL, defL := eval.ChooseThresholds(devItems, linDev, *retain, 100)
 	// The headline row uses the thresholds shipped in the artifact (the operating
 	// point a deployment would run); the re-tuned row shows what this dev split
 	// would choose, which differs when -retain/-window or the dev data differ.
@@ -113,9 +113,14 @@ func main() {
 	var bTest []float64
 	var bDur time.Duration
 	if bVer != nil {
-		bDev, _, _ := eval.Scores(devItems, bVer)
-		bTest, _, bDur = eval.Scores(testItems, bVer)
-		thB, defB := eval.ChooseThresholds(devItems, bDev, *retain, 30)
+		bDev, bDevReasons, _ := eval.Scores(devItems, bVer)
+		var bReasons []string
+		bTest, bReasons, bDur = eval.Scores(testItems, bVer)
+		if n := eval.CountErrors(bDevReasons) + eval.CountErrors(bReasons); n > 0 {
+			fmt.Fprintf(&sb, "\n**Warning:** the ONNX verifier failed on %d of %d candidates (scored 0.5); its row below is not a measurement of the model.\n\n", n, len(devItems)+len(testItems))
+			fmt.Fprintf(os.Stderr, "warning: ONNX verifier errors on %d candidates\n", n)
+		}
+		thB, defB := eval.ChooseThresholds(devItems, bDev, *retain, 100)
 		cfgs = append(cfgs, eval.Config{Name: "B onnx", Scores: bTest, Thresholds: thB, Default: defB})
 	}
 	var results []*eval.Result
@@ -136,7 +141,7 @@ func main() {
 	testU, _ := eval.Collect(test, ungated, *window)
 	linDevU, _, _ := eval.Scores(devU, lin)
 	linTestU, _, _ := eval.Scores(testU, lin)
-	thU, defU := eval.ChooseThresholds(devU, linDevU, *retain, 30)
+	thU, defU := eval.ChooseThresholds(devU, linDevU, *retain, 100)
 	if len(trainedOn) > 0 {
 		fmt.Fprintf(&sb, "\n**Note:** %s also served as training data for this model (same file hash in the manifest); real-document numbers below are not out-of-sample.\n", strings.Join(trainedOn, ", "))
 	}

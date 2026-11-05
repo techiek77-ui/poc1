@@ -17,16 +17,22 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"sort"
+	"strconv"
+	"strings"
 	"sync"
+	"unicode"
 
 	"github.com/sugarme/tokenizer"
 	"github.com/sugarme/tokenizer/pretrained"
 	ort "github.com/yalue/onnxruntime_go"
+	"golang.org/x/text/unicode/norm"
 
 	"github.com/techiek77-ui/poc1/pkg/pii"
 	"github.com/techiek77-ui/poc1/pkg/pii/attrib"
 	"github.com/techiek77-ui/poc1/pkg/pii/detect"
 	"github.com/techiek77-ui/poc1/pkg/pii/onnxinput"
+	"github.com/techiek77-ui/poc1/pkg/pii/verify"
 )
 
 // Manifest is written next to the model by the training script.
@@ -50,18 +56,27 @@ type Verifier struct {
 	hasType bool
 }
 
-var initOnce sync.Once
-var initErr error
+var (
+	initMu      sync.Mutex
+	initialized bool
+)
 
-// Init points ONNX Runtime at the shared library and initialises it once.
+// Init points ONNX Runtime at the shared library and initialises it once. A
+// failed attempt (wrong path) can be retried with another path.
 func Init(ortLib string) error {
-	initOnce.Do(func() {
-		if ortLib != "" {
-			ort.SetSharedLibraryPath(ortLib)
-		}
-		initErr = ort.InitializeEnvironment()
-	})
-	return initErr
+	initMu.Lock()
+	defer initMu.Unlock()
+	if initialized {
+		return nil
+	}
+	if ortLib != "" {
+		ort.SetSharedLibraryPath(ortLib)
+	}
+	if err := ort.InitializeEnvironment(); err != nil {
+		return err
+	}
+	initialized = true
+	return nil
 }
 
 // New loads a model directory.
@@ -100,7 +115,11 @@ func New(dir string) (*Verifier, error) {
 	// servers scale by running several sessions/goroutines (PII_ORT_THREADS overrides).
 	threads := 1
 	if s := os.Getenv("PII_ORT_THREADS"); s != "" {
-		fmt.Sscanf(s, "%d", &threads)
+		n, err := strconv.Atoi(s)
+		if err != nil || n < 1 {
+			return nil, fmt.Errorf("PII_ORT_THREADS=%q is not a positive integer", s)
+		}
+		threads = n
 	}
 	if err := opts.SetIntraOpNumThreads(threads); err != nil {
 		return nil, err
@@ -123,8 +142,40 @@ func New(dir string) (*Verifier, error) {
 		if err := opts.AppendExecutionProviderCoreML(0); err != nil {
 			return nil, fmt.Errorf("coreml provider: %w", err)
 		}
+	case "", "cpu":
+	default:
+		return nil, fmt.Errorf("PII_ORT_EP=%q is not one of cpu, cuda, coreml", os.Getenv("PII_ORT_EP"))
 	}
-	sess, err := ort.NewDynamicAdvancedSession(filepath.Join(dir, m.ModelFile), inputs, []string{"logits"}, opts)
+	// The manifest's input list must be exactly what the exported graph takes:
+	// a tokenizer may produce token_type_ids that the model ignores, and the
+	// exporter prunes unused inputs; feeding them makes every Run fail.
+	modelPath := filepath.Join(dir, m.ModelFile)
+	gIn, gOut, err := ort.GetInputOutputInfo(modelPath)
+	if err != nil {
+		return nil, fmt.Errorf("inspect %s: %w", modelPath, err)
+	}
+	graphInputs := map[string]bool{}
+	for _, gi := range gIn {
+		graphInputs[gi.Name] = true
+	}
+	for _, name := range inputs {
+		if !graphInputs[name] {
+			return nil, fmt.Errorf("manifest input %q is not an input of %s (graph has %v)", name, m.ModelFile, keys(graphInputs))
+		}
+	}
+	if len(gIn) != len(inputs) {
+		return nil, fmt.Errorf("%s takes %d inputs %v, manifest lists %v", m.ModelFile, len(gIn), keys(graphInputs), inputs)
+	}
+	hasLogits := false
+	for _, o := range gOut {
+		if o.Name == "logits" {
+			hasLogits = true
+		}
+	}
+	if !hasLogits {
+		return nil, fmt.Errorf("%s has no output named logits", m.ModelFile)
+	}
+	sess, err := ort.NewDynamicAdvancedSession(modelPath, inputs, []string{"logits"}, opts)
 	if err != nil {
 		return nil, fmt.Errorf("onnx session: %w", err)
 	}
@@ -135,6 +186,33 @@ func New(dir string) (*Verifier, error) {
 		}
 	}
 	return v, nil
+}
+
+func keys(m map[string]bool) []string {
+	var out []string
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// preNormalize applies NFD, drops combining marks and lowercases, the same
+// transformation the tokenizer's BertNormalizer(lowercase, strip_accents)
+// performs, so the Go tokenizer only ever sees text it handles identically to
+// the Python one (and never the length-changing cases it panics on, such as
+// U+0130 or U+1E9E). Applying the normalizer twice is idempotent.
+func preNormalize(s string) string {
+	s = norm.NFD.String(s)
+	var b strings.Builder
+	b.Grow(len(s))
+	for _, r := range s {
+		if unicode.Is(unicode.Mn, r) {
+			continue
+		}
+		b.WriteRune(r)
+	}
+	return strings.ToLower(b.String())
 }
 
 // Close releases the session.
@@ -163,7 +241,7 @@ func (v *Verifier) Encode(text string) (ids, mask, types []int64, err error) {
 			ids, mask, types, err = nil, nil, nil, fmt.Errorf("tokenizer panic: %v", r)
 		}
 	}()
-	en, err := v.tk.EncodeSingle(text, true)
+	en, err := v.tk.EncodeSingle(preNormalize(onnxinput.Clean(text)), true)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -178,6 +256,9 @@ func (v *Verifier) Encode(text string) (ids, mask, types []int64, err error) {
 	for i := 0; i < n; i++ {
 		ids[i] = int64(en.Ids[i])
 		mask[i] = 1
+		if i < len(en.AttentionMask) { // a tokenizer with a padding section marks pads here
+			mask[i] = int64(en.AttentionMask[i])
+		}
 		if i < len(en.TypeIds) {
 			types[i] = int64(en.TypeIds[i])
 		}
@@ -193,7 +274,7 @@ func (v *Verifier) Score(_ *detect.DocView, c *pii.Candidate, a *attrib.Analysis
 	text := onnxinput.Build(c, a)
 	p, err := v.ScoreText(text)
 	if err != nil {
-		return 0.5, "onnx error: " + err.Error()
+		return 0.5, verify.ErrorReasonPrefix + err.Error() // neutral score, visible in the log and in eval
 	}
 	return p, fmt.Sprintf("onnx p=%.3f", p)
 }

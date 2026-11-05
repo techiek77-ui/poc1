@@ -53,7 +53,13 @@ func main() {
 		fmt.Fprintf(os.Stderr, "(no model loaded: %v)\n", err)
 	}
 	rules := verify.Rules{}
-	fmt.Printf("%-15s %-28s %-8s %-7s %-7s %s\n", "TYPE", "VALUE", "KEYWORD", "RULES", "LINEAR", "WHY")
+	bVer, closeB := extraVerifier()
+	defer closeB()
+	bcol := ""
+	if bVer != nil {
+		bcol = " ONNX   "
+	}
+	fmt.Printf("%-15s %-28s %-8s %-7s %-7s%s %s\n", "TYPE", "VALUE", "KEYWORD", "RULES", "LINEAR", bcol, "WHY")
 	for i := range cands {
 		c := &cands[i]
 		a := attrib.Analyze(v, c, *window)
@@ -80,7 +86,12 @@ func main() {
 		if ls >= 0 {
 			lscore = fmt.Sprintf("%.3f", ls)
 		}
-		fmt.Printf("%-15s %-28s %-8s %.2f    %s %s | rules: %s | model: %s\n", c.Type, val, kw, rs, lscore, keep, rr, strings.TrimSpace(lr))
+		bs := ""
+		if bVer != nil {
+			p, _ := bVer.Score(v, c, a)
+			bs = fmt.Sprintf(" %.3f  ", p)
+		}
+		fmt.Printf("%-15s %-28s %-8s %.2f    %s %s%s | rules: %s | model: %s\n", c.Type, val, kw, rs, lscore, keep, bs, rr, strings.TrimSpace(lr))
 	}
 	if len(cands) == 0 {
 		fmt.Println("(no candidates)")

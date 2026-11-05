@@ -230,3 +230,40 @@ func TestLoneDigitBeforeMobileIsNotAGroup(t *testing.T) {
 		}
 	}
 }
+
+func TestAddressCandidatesAreAddresses(t *testing.T) {
+	// a list of identifiers before a 6-digit number is not an address
+	for _, text := range []string{
+		"Tanvi Chauhan,7092095804@oksbi,102108840189,709212\n",
+		"ref 8841 2234 9912, 44210987, 560011",
+	} {
+		for _, c := range run(t, text, pii.FormatText) {
+			if c.Type == pii.Address {
+				t.Errorf("%q: number list proposed as address: %q", text, c.Value)
+			}
+		}
+	}
+	// a label in a header row does not introduce the value row as an address
+	text := "Card Number\tSB A/C NO\tPassport No\tBilling Address\n422232573175\t437113\tM1234567\tFlat 2, MG Road, Pune 411001\n"
+	for _, c := range run(t, text, pii.FormatText) {
+		if c.Type == pii.Address && strings.HasPrefix(c.Value, "422232573175") {
+			t.Errorf("header-row label captured the value row: %q", c.Value)
+		}
+	}
+	// an address ends at its PIN code
+	text = "resident of D-14, Sector 15, Noida, Uttar Pradesh 201301, hereinafter the Landlord, and Ms. Shruti Nair (Aadhaar No. 528374619208)"
+	found := false
+	for _, c := range run(t, text, pii.FormatText) {
+		if c.Type == pii.Address {
+			if strings.Contains(c.Value, "hereinafter") {
+				t.Errorf("address ran past the PIN code: %q", c.Value)
+			}
+			if strings.HasPrefix(c.Value, "D-14") {
+				found = true
+			}
+		}
+	}
+	if !found {
+		t.Error("address starting at D-14 not proposed")
+	}
+}

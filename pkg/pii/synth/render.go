@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math/rand"
+	"regexp"
 	"strings"
 	"time"
 
@@ -18,16 +19,28 @@ var baseTime = time.Date(2026, 11, 4, 12, 0, 0, 0, time.UTC)
 type Builder struct {
 	sb    strings.Builder
 	truth []pii.TruthSpan
+	vals  []string // the exact text written for each truth span (tests)
 }
 
 func (b *Builder) S(s string) { b.sb.WriteString(s) }
 
 // V writes a value and records it as a truth span of the field's type/kind.
+// An address also gets a nested PINCODE span: the PIN code inside it is PII
+// in its own right, and a PINCODE detection on it must count as correct.
 func (b *Builder) V(val string, typ pii.EntityType, kind string) {
 	st := b.sb.Len()
 	b.sb.WriteString(val)
 	b.truth = append(b.truth, pii.TruthSpan{Start: st, End: b.sb.Len(), Type: typ, Kind: kind})
+	b.vals = append(b.vals, val)
+	if typ == pii.Address {
+		if loc := pinInAddress.FindStringIndex(val); loc != nil {
+			b.truth = append(b.truth, pii.TruthSpan{Start: st + loc[0], End: st + loc[1], Type: pii.Pincode, Kind: "pincode"})
+			b.vals = append(b.vals, val[loc[0]:loc[1]])
+		}
+	}
 }
+
+var pinInAddress = regexp.MustCompile(`\b[1-9]\d{5}\b`)
 
 func (b *Builder) Len() int { return b.sb.Len() }
 
@@ -48,7 +61,7 @@ type ctx struct {
 }
 
 func (c *ctx) label(f *Field) string {
-	l := pickPooled(c.r, f.Labels, c.split)
+	l := pickLabel(c.r, f, c.split)
 	switch c.r.Intn(10) {
 	case 0, 1:
 		return strings.ToLower(l)
@@ -315,8 +328,14 @@ func (c *ctx) prose() {
 				}
 			case 2:
 				tpl = pickPooled(c.r, prose2, c.split)
+				if c.r.Intn(5) == 0 {
+					tpl = pickPooled(c.r, hardLayouts2, c.split)
+				}
 			default:
 				tpl = pickPooled(c.r, prose3, c.split)
+				if c.r.Intn(5) == 0 {
+					tpl = pickPooled(c.r, hardLayouts3, c.split)
+				}
 				if len(fs) > 3 {
 					fs = fs[:3]
 				}
@@ -338,6 +357,24 @@ func (c *ctx) form() {
 	}
 	fs := c.chooseFields(2+c.r.Intn(4), c.r.Intn(4), false)
 	insts := c.insts(fs)
+	if c.r.Intn(7) == 0 { // aligned table: a row of labels, then a row of values
+		colSep := pick(c.r, []string{"\t", "  |  ", "    ", " | "})
+		for i, in := range insts {
+			if i > 0 {
+				b.S(colSep)
+			}
+			b.S(in.Label)
+		}
+		b.S("\n")
+		for i, in := range insts {
+			if i > 0 {
+				b.S(colSep)
+			}
+			b.V(in.Value, in.F.Type, in.F.Kind)
+		}
+		b.S("\n")
+		return
+	}
 	sep := pick(c.r, []string{": ", ": ", " : ", ":", " - ", " – ", "  ", "\t", " = ", ": \t", "#", " "})
 	joiner := pick(c.r, []string{"\n", "\n", "\n", " | ", ", ", "    ", "; ", "  ", "\n"})
 	for i, in := range insts {
@@ -378,15 +415,38 @@ func (c *ctx) csv() {
 		fs = append([]*Field{FieldByKind["name"]}, fs...)
 	}
 	labelsFor := make([]string, len(fs))
+	idTypeCol := -1 // "id_type,id_number" pairs: the type name sits in the cell before the value
 	for i, f := range fs {
-		labelsFor[i] = headerStyle(style, pickPooled(c.r, f.Labels, c.split))
+		labelsFor[i] = headerStyle(style, pickLabel(c.r, f, c.split))
 		if c.r.Intn(6) == 0 { // ambiguous header
 			labelsFor[i] = pick(c.r, []string{"id", "number", "ref", "value", fmt.Sprintf("col%d", i+1), fmt.Sprintf("field_%d", i+1), "no", "data", "identifier"})
+		}
+		if idTypeCol < 0 && c.r.Intn(4) == 0 && (f.Kind == "aadhaar" || f.Kind == "pan" || f.Kind == "voter_id" || f.Kind == "passport" || f.Kind == "driving_licence") {
+			idTypeCol = i
+			labelsFor[i] = headerStyle(style, pick(c.r, []string{"ID Number", "Document No", "KYC Number", "Proof Number", "ID Value"}))
+		}
+	}
+	idTypeName := func(f *Field) string {
+		switch f.Kind {
+		case "aadhaar":
+			return pick(c.r, []string{"AADHAAR", "Aadhaar", "AADHAR", "UID"})
+		case "pan":
+			return pick(c.r, []string{"PAN", "Pan Card"})
+		case "voter_id":
+			return pick(c.r, []string{"VOTER ID", "EPIC", "Voter Id"})
+		case "passport":
+			return pick(c.r, []string{"PASSPORT", "Passport"})
+		default:
+			return pick(c.r, []string{"DL", "DRIVING LICENCE", "Driving License"})
 		}
 	}
 	remarks := c.r.Intn(3) == 0
 	if c.r.Intn(10) > 0 { // header row (sometimes missing)
-		b.S(strings.Join(labelsFor, delim))
+		hdr := append([]string{}, labelsFor...)
+		if idTypeCol >= 0 {
+			hdr = append(hdr[:idTypeCol], append([]string{headerStyle(style, pick(c.r, []string{"ID Type", "Document Type", "KYC Type", "Proof Type"}))}, hdr[idTypeCol:]...)...)
+		}
+		b.S(strings.Join(hdr, delim))
 		if remarks {
 			b.S(delim + pick(c.r, []string{"remarks", "notes", "description", "comments", "Remarks"}))
 		}
@@ -401,6 +461,9 @@ func (c *ctx) csv() {
 		for i, f := range fs {
 			if i > 0 {
 				b.S(delim)
+			}
+			if i == idTypeCol {
+				b.S(idTypeName(f) + delim)
 			}
 			v := f.Gen(c.r, p)
 			quoted := strings.Contains(v, delim) || (c.r.Intn(5) == 0 && delim == ",")
@@ -465,7 +528,7 @@ func (c *ctx) jsonDoc() {
 		}
 		meta := c.r.Intn(2) == 0
 		for i, f := range fs {
-			key := identifier(c.r, pickPooled(c.r, f.Labels, c.split))
+			key := identifier(c.r, pickLabel(c.r, f, c.split))
 			if c.r.Intn(8) == 0 {
 				key = pick(c.r, []string{"id", "value", "number", "ref", "no", "data"})
 			}
@@ -571,7 +634,7 @@ func (c *ctx) jsonLine() {
 		if i > 0 {
 			b.S(",")
 		}
-		b.S(`"` + identifier(c.r, pickPooled(c.r, f.Labels, c.split)) + `":`)
+		b.S(`"` + identifier(c.r, pickLabel(c.r, f, c.split)) + `":`)
 		v := f.Gen(c.r, c.p)
 		if isAllDigits(v) && c.r.Intn(3) == 0 {
 			b.V(v, f.Type, f.Kind)
@@ -599,7 +662,7 @@ func (c *ctx) code() {
 	keys := make([]string, len(fs))
 	vals := make([]string, len(fs))
 	for i, f := range fs {
-		keys[i] = identifier(c.r, pickPooled(c.r, f.Labels, c.split))
+		keys[i] = identifier(c.r, pickLabel(c.r, f, c.split))
 		vals[i] = f.Gen(c.r, c.p)
 	}
 	switch c.r.Intn(6) {
@@ -897,7 +960,7 @@ func generateOne(r *rand.Rand, i int, split, shape string) pii.Doc {
 			shape = "ocr"
 		}
 	}
-	return pii.Doc{ID: fmt.Sprintf("d%06d", i), Split: split, Format: format, Shape: shape, Text: text, Truth: truth}
+	return pii.Doc{ID: fmt.Sprintf("d%06d", i), Split: split, Format: format, Shape: shape, Text: text, Truth: truth, Nested: true}
 }
 
 // MarshalJSONL encodes docs one per line.

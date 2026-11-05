@@ -110,7 +110,10 @@ func (Rules) Score(v *detect.DocView, c *pii.Candidate, a *attrib.Analysis) (flo
 				score *= 0.5
 				reason += "; single non-dictionary word"
 			}
-			if gazetteer_isStreetWord(ni.NextWord) {
+			if ni.PlaceWord {
+				score *= 0.4
+				reason += "; ends in or precedes a place word (street, building, city)"
+			} else if gazetteer_isStreetWord(ni.NextWord) {
 				score *= 0.5
 				reason += "; followed by '" + ni.NextWord + "' (street name)"
 			}

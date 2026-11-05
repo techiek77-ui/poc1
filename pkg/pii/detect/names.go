@@ -223,7 +223,23 @@ func (d *Detector) addressCandidates(v *DocView) []pii.Candidate {
 		if h.Kind != labels.KAddress || !strings.Contains(h.Phrase, "add") && !strings.Contains(h.Phrase, "resid") && !strings.Contains(h.Phrase, "located") {
 			continue
 		}
-		s := h.End + len(sepRe.FindString(text[h.End:]))
+		sep := sepRe.FindString(text[h.End:])
+		if strings.ContainsAny(sep, "\n\r") {
+			// "Address" in a header row does not introduce the next line: that
+			// line holds every column's value, not an address
+			ls := strings.LastIndexAny(text[:h.Start], "\n\r") + 1
+			le := h.End + strings.IndexAny(text[h.End:]+"\n", "\n\r")
+			others := 0
+			for _, o := range v.LabelsIn(ls, le) {
+				if o.Start != h.Start {
+					others++
+				}
+			}
+			if others >= 2 {
+				continue
+			}
+		}
+		s := h.End + len(sep)
 		e := s
 		limit := min(len(text), s+220)
 		for e < limit {
@@ -237,7 +253,15 @@ func (d *Detector) addressCandidates(v *DocView) []pii.Candidate {
 				e = o.Start
 			}
 		}
-		if countWords(text[s:e]) >= 2 {
+		// an address ends at its PIN code (plus an optional state / country)
+		if loc := pinRe.FindStringIndex(text[s:e]); loc != nil {
+			pe := s + loc[1]
+			e = pe
+			if m := stateRe.FindString(text[pe:]); m != "" && stateSuffixOK(m) {
+				e = pe + len(m)
+			}
+		}
+		if countWords(text[s:e]) >= 2 && hasAddressWord(text[s:e]) {
 			emit(s, e, true)
 		}
 	}
@@ -287,42 +311,72 @@ func (d *Detector) addressCandidates(v *DocView) []pii.Candidate {
 		if start > ps-3 { // nothing before the PIN
 			continue
 		}
-		if cues < 2 {
+		if cues < 2 || !hasAddressWord(text[start:ps]) {
 			continue
 		}
 		e := pe
-		if m := stateRe.FindString(text[pe:]); m != "" {
-			ws := strings.Fields(strings.Trim(m, ", "))
-			ok := false
-			for _, w := range ws {
-				if gazetteer.IsState(w) || gazetteer.IsState(strings.Join(ws, " ")) || w == "India" {
-					ok = true
-				}
-			}
-			if ok {
-				e = pe + len(m)
-			}
+		if m := stateRe.FindString(text[pe:]); m != "" && stateSuffixOK(m) {
+			e = pe + len(m)
 		}
 		emit(start, e, true)
 	}
 	return out
 }
 
-// segCues counts address evidence in one comma-separated segment.
+// segCues counts address evidence in one comma-separated segment: cue words
+// and house-number patterns. A segment that is itself a value (e-mail, UPI
+// handle, an identifier of 9+ digits) is not part of an address.
 func segCues(seg string) int {
+	if strings.Contains(seg, "@") || longestDigitRun(seg) >= 9 {
+		return 0
+	}
 	n := 0
 	for _, tk := range labels.Tokenize(seg) {
-		if gazetteer.AddressCues[tk.Text] {
+		if len(tk.Text) >= 3 && gazetteer.AddressCues[tk.Text] {
 			n++
 		}
 	}
 	if houseRe.MatchString(seg) {
 		n++
 	}
-	if strings.ContainsAny(seg, "0123456789") && n == 0 {
-		n++ // house / plot numbers
-	}
 	return n
+}
+
+func longestDigitRun(s string) int {
+	best, cur := 0, 0
+	for i := 0; i < len(s); i++ {
+		if s[i] >= '0' && s[i] <= '9' {
+			cur++
+			if cur > best {
+				best = cur
+			}
+		} else {
+			cur = 0
+		}
+	}
+	return best
+}
+
+// hasAddressWord requires at least one alphabetic address cue (street,
+// locality, city, state, "flat", "near"...) so that a list of numbers never
+// passes as an address.
+func hasAddressWord(s string) bool {
+	for _, tk := range labels.Tokenize(s) {
+		if len(tk.Text) >= 3 && gazetteer.AddressCues[tk.Text] {
+			return true
+		}
+	}
+	return false
+}
+
+func stateSuffixOK(m string) bool {
+	ws := strings.Fields(strings.Trim(m, ", "))
+	for _, w := range ws {
+		if gazetteer.IsState(w) || gazetteer.IsState(strings.Join(ws, " ")) || w == "India" {
+			return true
+		}
+	}
+	return false
 }
 
 func countWords(s string) int { return len(strings.Fields(s)) }

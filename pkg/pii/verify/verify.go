@@ -9,6 +9,11 @@ import (
 	"github.com/techiek77-ui/poc1/pkg/pii/detect"
 )
 
+// ErrorReasonPrefix starts the reason of a verifier that could not score a
+// candidate and returned a neutral 0.5; eval counts these so a dead verifier
+// cannot pass as a perfect one.
+const ErrorReasonPrefix = "verifier error: "
+
 // Verifier scores a candidate: probability-like score in [0,1] that the
 // candidate really is the claimed entity type, plus a reason for the log.
 type Verifier interface {

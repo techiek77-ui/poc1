@@ -1,10 +1,12 @@
 # Linux pod image: pure-Go scanner (rules + Tier A) by default; add the ONNX tier
 # with --build-arg ONNX=1 (CGO build + ONNX Runtime shared library).
 #
-#   docker build -t pii-poc .                      # rules + Tier A, static binary, distroless
-#   docker build -t pii-poc:onnx --build-arg ONNX=1 . # + Tier B via ONNX Runtime
+#   docker build -t pii-poc .                                                          # rules + Tier A, static binary, distroless
+#   docker build -t pii-poc:onnx --build-arg ONNX=1 --build-arg RUNTIME=runtime-onnx .  # + Tier B via ONNX Runtime (piiscan -onnx <dir>)
 ARG ONNX=0
 ARG ORT_VERSION=1.31.1
+# RUNTIME selects the final image: runtime-static (default) or runtime-onnx
+ARG RUNTIME=runtime-static
 
 FROM golang:1.24-bookworm AS build
 ARG ONNX
@@ -22,14 +24,18 @@ RUN if [ "$ONNX" = "1" ]; then \
       CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/piiscan ./cmd/piiscan ; \
     fi
 
-# Runtime: distroless static for the pure-Go build; debian-slim (glibc) when ONNX Runtime is included.
+# Runtime images; the final stage picks one by the RUNTIME build arg.
+FROM debian:bookworm-slim AS runtime-onnx
+COPY --from=build /out/ /app/
+COPY models/tier_a_lr.json /models/tier_a_lr.json
+COPY models/tier_b /models/tier_b
+ENV PII_ORT_LIB=/app/lib/libonnxruntime.so PII_ORT_THREADS=1
+ENTRYPOINT ["/app/piiscan", "-model", "/models/tier_a_lr.json", "-onnx", "/models/tier_b"]
+
 FROM gcr.io/distroless/static-debian12 AS runtime-static
 COPY --from=build /out/piiscan /piiscan
 COPY models/tier_a_lr.json /models/tier_a_lr.json
 ENTRYPOINT ["/piiscan", "-model", "/models/tier_a_lr.json"]
 
-FROM debian:bookworm-slim AS runtime-onnx
-COPY --from=build /out/ /app/
-COPY models/tier_a_lr.json /models/tier_a_lr.json
-ENV PII_ORT_LIB=/app/lib/libonnxruntime.so PII_ORT_THREADS=1
-ENTRYPOINT ["/app/piiscan", "-model", "/models/tier_a_lr.json"]
+# Final image = the selected runtime stage.
+FROM ${RUNTIME} AS final

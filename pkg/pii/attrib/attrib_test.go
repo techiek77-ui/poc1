@@ -138,3 +138,16 @@ func TestVerbAttachmentAndAdjacentValues(t *testing.T) {
 		t.Fatalf("'ref no' governs across an intervening number: %+v", a.Governing)
 	}
 }
+
+func TestTableAlignedHeader(t *testing.T) {
+	text := "Aadhaar No\tAccount No\tMobile\n738192045614\t509347182063\t9876543210\n"
+	a := analyze(t, text, pii.FormatText, pii.Aadhaar, "509347182063")
+	if k, s := gov(a); k != labels.KBankAccount || s != Header {
+		t.Fatalf("value under 'Account No' should be governed by it, got %v %v (header=%q)", k, s, a.Header)
+	}
+	text = "Aadhaar No  |  Account No  |  Mobile\n738192045614  |  509347182063  |  9876543210\n"
+	a = analyze(t, text, pii.FormatText, pii.Aadhaar, "738192045614")
+	if k, _ := gov(a); k != labels.KAadhaar {
+		t.Fatalf("pipe-aligned header not used: %v", k)
+	}
+}

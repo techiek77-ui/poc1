@@ -26,14 +26,22 @@ func Build(c *pii.Candidate, a *attrib.Analysis) string {
 	sb.WriteString(" | ")
 	sb.WriteString(collapse(a.Left))
 	sb.WriteString(" « ")
-	sb.WriteString(c.Value)
+	sb.WriteString(collapse(c.Value))
 	sb.WriteString(" » ")
 	sb.WriteString(collapse(a.Right))
 	return sb.String()
 }
 
+// Clean is the sanitation every model input goes through (idempotent): valid
+// UTF-8, no square brackets (a literal "[SEP]" must not become a special
+// token), line breaks as ⏎, single spaces. The Go runtime applies it again in
+// Encode and the Python reference generation applies the same function, so
+// raw strings in reference.json are compared on equal terms.
+func Clean(s string) string { return collapse(s) }
+
 func collapse(s string) string {
-	s = strings.ToValidUTF8(s, "") // a tokenizer must never see a half character
+	s = strings.ToValidUTF8(s, "")                         // a tokenizer must never see a half character
+	s = strings.NewReplacer("[", " ", "]", " ").Replace(s) // "[SEP]" in text must not become a special token
 	s = strings.ReplaceAll(s, "\n", " ⏎ ")
 	s = strings.ReplaceAll(s, "\r", "")
 	s = strings.ReplaceAll(s, "\t", " ")

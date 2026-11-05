@@ -53,10 +53,16 @@ func main() {
 	for i := 0; i < 10 && i < len(texts); i++ { // warm-up
 		v.ScoreText(texts[i])
 	}
+	if len(texts) == 0 {
+		fail(fmt.Errorf("no candidate windows in %s (run piiexport first)", *data))
+	}
 	durs := make([]time.Duration, 0, len(texts))
 	tokens := 0
 	for _, t := range texts {
-		ids, _, _, _ := v.Encode(t)
+		ids, _, _, err := v.Encode(t)
+		if err != nil {
+			fail(err)
+		}
 		tokens += len(ids)
 		t0 := time.Now()
 		if _, err := v.ScoreText(t); err != nil {

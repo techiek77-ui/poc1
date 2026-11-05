@@ -10,6 +10,12 @@ ONNX session from Go, dynamic sequence length, and the manifest contract.
 """
 import argparse, json, os, random
 import numpy as np
+
+
+def clean_input(s):
+    """Mirror of pkg/pii/onnxinput.Clean: the Go runtime applies it to every model input."""
+    s = s.replace("[", " ").replace("]", " ").replace("\n", " ⏎ ").replace("\r", "").replace("\t", " ")
+    return " ".join(s.split())
 import onnx
 from onnx import TensorProto, helper, numpy_helper
 from tokenizers import Tokenizer, models, normalizers, pre_tokenizers, trainers, processors
@@ -17,7 +23,7 @@ from tokenizers import Tokenizer, models, normalizers, pre_tokenizers, trainers,
 
 def train_tokenizer(texts, vocab_size):
     tok = Tokenizer(models.WordPiece(unk_token="[UNK]"))
-    tok.normalizer = normalizers.Sequence([normalizers.NFD(), normalizers.Lowercase(), normalizers.StripAccents()])
+    tok.normalizer = normalizers.BertNormalizer(clean_text=True, handle_chinese_chars=False, strip_accents=True, lowercase=True)  # same as the Go runtime
     tok.pre_tokenizer = pre_tokenizers.BertPreTokenizer()
     trainer = trainers.WordPieceTrainer(vocab_size=vocab_size, special_tokens=["[PAD]", "[UNK]", "[CLS]", "[SEP]", "[MASK]"])
     tok.train_from_iterator(texts, trainer)
@@ -77,7 +83,14 @@ def main():
     import onnxruntime as ort
     sess = ort.InferenceSession(os.path.join(args.out, "model.onnx"), providers=["CPUExecutionProvider"])
     refs = []
-    for t in texts[:8]:
+    adversarial = [
+        "amount | - | Rs ₹ 12,34,567 ⏎ naïve café Ünïcödé « 738192045614 » İstanbul straße ﬁne",
+        "name | - | भारत सरकार ⏎ मेरा आधार, मेरी पहचान « Suresh Babu » S/O Venkata",
+        "aadhaar | - | [CLS] [SEP] [PAD] [UNK] [MASK] « 738192045614 » [SEP]",
+        "pan | aadhaar_no | ẞ Ǆ ǅ « ABCPE1234F » ﬀ ﬁ",
+        "",
+    ]
+    for t in texts[:8] + [clean_input(a) for a in adversarial]:
         enc = tok.encode(t)
         ids = np.array([enc.ids], dtype=np.int64)
         mask = np.array([enc.attention_mask], dtype=np.int64)

@@ -89,7 +89,7 @@ func main() {
 	devItems, _ := eval.Collect(dev, gated, *window)
 	lin := &verify.Linear{M: m}
 	devScores, _, _ := eval.Scores(devItems, lin)
-	th, def := eval.ChooseThresholds(devItems, devScores, *retain, 30)
+	th, def := eval.ChooseThresholds(devItems, devScores, *retain, 100)
 	m.Thresholds, m.DefaultThreshold = th, def
 	m.Window = *window
 	truth := eval.TruthCounts(dev)

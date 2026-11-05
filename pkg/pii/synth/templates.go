@@ -172,6 +172,31 @@ var filler = []string{
 	"EMI of {D:amount} debited on {DATE}.",
 }
 
+// hardLayouts2/3 separate labels from their values the way tables, aligned
+// forms and slash-separated pairs do; the nearest-left attribution rule is
+// only meaningful if the corpus exercises these.
+var hardLayouts2 = []string{
+	"{L1} / {L2} : {V1} / {V2}",
+	"{L1}, {L2}: {V1}, {V2}",
+	"{L1}\t{L2}\n{V1}\t{V2}",
+	"{L1} | {L2}\n{V1} | {V2}",
+	"{L1}    {L2}\n{V1}    {V2}",
+	"{V1} - {L1}; {V2} - {L2}",
+	"{L1} and {L2} are {V1} and {V2} respectively.",
+	"({L1}, {L2}) = ({V1}, {V2})",
+	"{L1}={V1}&{L2}={V2}",
+	"{V1}, {V2} ({L1}, {L2})",
+}
+
+var hardLayouts3 = []string{
+	"{L1} / {L2} / {L3} : {V1} / {V2} / {V3}",
+	"{L1}\t{L2}\t{L3}\n{V1}\t{V2}\t{V3}",
+	"{L1} | {L2} | {L3}\n{V1} | {V2} | {V3}",
+	"{V1}, {V2}, {V3} ({L1}, {L2}, {L3})",
+	"{L1}, {L2} and {L3}: {V1}, {V2}, {V3}",
+	"{L1}   {L2}   {L3}\n{V1}   {V2}   {V3}",
+}
+
 // mobileCtx are label-free phone contexts ("call me on ...").
 var mobileCtx = []string{
 	"Call me on {V1} after 6 pm.",
