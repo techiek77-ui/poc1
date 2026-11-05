@@ -4,7 +4,7 @@
 
 **Question.** Can an ML model cut the false positives this pipeline produces, without losing true positives?
 
-**Answer.** Yes, and it should be added as a *verifier* behind the existing detector rather than as a replacement for it. On this POC's held-out data the verifier removes **97.9 % of false positives while keeping 99.6 % of true positives** (precision 87.2 % → 99.7 %); on a hand-written set of 48 documents in styles it was never trained on it removes **94 %** of false positives at **100 %** retention, and a rules-only version of the same idea removes 88 % at 100 % retention. It costs about 70 µs per candidate in pure Go, runs on endpoints, and ships as a data file that you can retrain and push independently of the binary. The numbers come from synthetic data and must be re-validated on real scans (section 9); the design is what carries over.
+**Answer.** Yes, and it should be added as a *verifier* behind the existing detector rather than as a replacement for it. On this POC's held-out data the verifier removes **93 % of false positives while keeping 99.4 % of true positives** (precision 89.0 % → 99.1 %); on a hand-written set of 48 documents in styles it was never trained on it removes **86 %** of false positives at 98.6 % retention, and a rules-only version of the same idea removes 86 % at 100 % retention. (An earlier draft reported 97.9 %; an independent review found the corpus had labelled PIN codes inside addresses as non-PII and rarely separated a label from its value — both fixed, see `REVIEW.md` — and the numbers here are from the corrected corpus.) It costs about 70 µs per candidate in pure Go, runs on endpoints, and ships as a data file that you can retrain and push independently of the binary. The numbers come from synthetic data and must be re-validated on real scans (section 9); the design is what carries over.
 
 Measured tables: [`RESULTS.md`](RESULTS.md). Code map and how to run: [`../README.md`](../README.md).
 
@@ -71,7 +71,7 @@ file ──► regex + checksum ──► candidates ──► context analysis 
 
 ### 4.1 The synthetic corpus, and why it is adversarial
 
-30 000 documents, 236 k labelled spans, split 70/10/20 by document. Label phrasings and sentence templates are *pooled* by hash so that the dev/test splits contain wordings never seen in training. Every PII type appears in every data shape. Distractors are generated with their own realistic labels, next to PII, and **35 % of non-Aadhaar 12-digit values are forced to pass the Verhoeff check with a leading 2–9** (the real rate is ~8 %, the higher rate makes the test harder). The brief's example is a template. Masked Aadhaar, test fixtures with dummy numbers, headerless CSVs, JSON with numeric values, `uid=` meaning user-id in logs, two values under one label, streets named after people and identity cards that do not print the word "Aadhaar" are all included because the first golden-set run showed they were missing.
+30 000 documents, 243 k labelled spans, split 70/10/20 by document. Label phrasings are pooled *per field over their normalised word sequence* (so `Aadhaar No.`, `aadhaar_no` and `AADHAAR NO` count as one phrasing) with a guaranteed dev-only and test-only phrasing for every PII field, and sentence templates are pooled by normalised hash; dev and test therefore contain wordings never seen in training. Nested PII is labelled (the PIN code inside every address is also a PINCODE span). About a fifth of multi-field documents use layouts that separate labels from their values — aligned header/value rows, `A / B : x / y`, value-before-label — because the attribution rule is only tested by them. Every PII type appears in every data shape. Distractors are generated with their own realistic labels, next to PII, and **35 % of non-Aadhaar 12-digit values are forced to pass the Verhoeff check with a leading 2–9** (the real rate is ~8 %, the higher rate makes the test harder). The brief's example is a template. Masked Aadhaar, test fixtures with dummy numbers, headerless CSVs, JSON with numeric values, `uid=` meaning user-id in logs, two values under one label, streets named after people and identity cards that do not print the word "Aadhaar" are all included because the first golden-set run showed they were missing.
 
 ### 4.2 Evaluation protocol
 
@@ -79,23 +79,23 @@ A detection is a (span, claimed type). It is a true positive if a labelled span 
 
 ## 5. Results
 
-Numbers below are from the final run in [`RESULTS.md`](RESULTS.md) (6 000 test documents, 29 561 baseline detections).
+Numbers below are from the final run in [`RESULTS.md`](RESULTS.md) (6 000 test documents, 29 616 baseline detections).
 
 ### 5.1 Held-out synthetic test split
 
 | configuration | TP | FP | precision | TP retention | FP reduction |
 |---|---:|---:|---:|---:|---:|
-| 0 baseline (regex + checksum + keyword ≤ 60 chars) | 25 788 | 3 773 | 87.2 % | 100 % | – |
-| 1 rules @0.5 | 25 060 | 1 063 | 95.9 % | 97.2 % | 71.8 % |
-| 1 rules @99 % retention | 25 721 | 1 418 | 94.8 % | 99.7 % | 62.4 % |
-| **A linear (pure Go)** | **25 685** | **79** | **99.7 %** | **99.6 %** | **97.9 %** |
-| B onnx (BERT-tiny trained from scratch, no pretraining) | 24 695 | 2 444 | 91.0 % | 95.8 % | 35.2 % |
+| 0 baseline (regex + checksum + keyword ≤ 60 chars) | 26 370 | 3 246 | 89.0 % | 100 % | – |
+| 1 rules @0.5 | 25 389 | 752 | 97.1 % | 96.3 % | 76.8 % |
+| **A linear (pure Go), shipped thresholds** | **26 212** | **226** | **99.1 %** | **99.4 %** | **93.0 %** |
+| A linear + same-span resolution | 26 211 | 217 | 99.2 % | 99.4 % | 93.3 % |
+| B onnx (BERT-tiny trained from scratch, no pretraining) | see `RESULTS.md` | | | | |
 
-FP reduction at other retention targets (thresholds from dev, measured on test): linear 94.4 % at 99.9 % retention, 97.2 % at 99.5 %, 97.9 % at 99.0 %; rules 7.6 % / 61.4 % / 62.4 % (the rules' scores are coarse, so a 99.9 % target leaves almost no room).
+Span-level retention (labelled spans that keep at least one detection) equals detection-level retention to within 0.02 points in every row. Rules tuned to a 99 % retention target collapse to 5 % FP reduction: their scores are too coarse to trade off, which is one reason to want a model.
 
-By data shape the linear verifier removes 93–100 % of false positives (966 → 33 in CSV, 909 → 4 in forms, 778 → 12 in prose, 272 → 4 in OCR, 177 → 12 in code, where dummy numbers labelled as Aadhaar are the largest residual category). By entity type the biggest absolute wins are BANK_ACCOUNT (1 412 → 8: the 12-digit collisions), AADHAAR (719 → 45), NAME (440 → 5), ADDRESS (399 → 8), UAN (343 → 1) and PINCODE (339 → 9); the full per-type table is in `RESULTS.md`.
+By data shape the linear verifier removes 88–100 % of false positives (681 → 78 in CSV, 800 → 19 in forms, 711 → 62 in prose, 317 → 14 in logs, 261 → 21 in OCR, 171 → 10 in code). By what the false positive really was, the largest baseline categories — Aadhaar numbers claimed as another type (384 → 20, 13 with same-span resolution), UPI/IMPS reference numbers (297 → 10), spans with no PII at all (277 → 9), names inside addresses (216 → 14), mobiles (199 → 9), PPO numbers (153 → 9) — all shrink by 90 % or more; the full tables are in `RESULTS.md`.
 
-The from-scratch Tier B row is there for honesty, not as a recommendation: a 5.4 M-parameter BERT trained for two epochs on 120 k synthetic windows learns the task only partially (21 % FP reduction at 99.3 % retention in its own evaluation; with the shared 0.5 threshold cap, 35 % at 95.8 %). It proves the pipeline — export, quantisation, Go tokenisation parity, latency — not the model class. The published evidence (GitHub's ModernBERT verifier) is for *pretrained* encoders, which this environment could not download.
+The from-scratch Tier B row is there for honesty, not as a recommendation: a 5.4 M-parameter BERT trained for two epochs on 120 k synthetic windows learns the task only partially (its figures are in `RESULTS.md`). It proves the pipeline — export, int8 quantisation, Go tokenisation parity on real and adversarial inputs, latency — not the model class. The published evidence (GitHub's ModernBERT verifier) is for *pretrained* encoders, which this environment could not download.
 
 ### 5.2 Golden set — 48 documents in styles the generator does not produce
 
@@ -103,15 +103,15 @@ Bank SMS, UPI notifications, WhatsApp-style chat, an HR email, logs where `uid` 
 
 | configuration | TP | FP | precision | TP retention | FP reduction |
 |---|---:|---:|---:|---:|---:|
-| 0 baseline | 147 | 52 | 73.9 % | 100 % | – |
-| 1 rules @0.5 | 147 | 6 | 96.1 % | **100 %** | 88.5 % |
-| A linear | 147 | 3 | 98.0 % | **100 %** | **94.2 %** |
+| 0 baseline | 147 | 22 | 87.0 % | 100 % | – |
+| 1 rules @0.5 | 147 | 3 | 98.0 % | **100 %** | 86.4 % |
+| A linear | 145 | 3 | 98.0 % | 98.6 % | 86.4 % |
 
-Every remaining error is listed in `RESULTS.md`. Both verifiers keep every true positive on this set. The linear model's three remaining false positives are all test-fixture dummies (`TEST_PAN = "ABCPE1234F"`, `TEST_ACCOUNT = "234567890124"`, `TEST_MOBILE = "9999999999"`). The rules are wrong in six places, all genuinely ambiguous or a rule being too generous: `number` as a column header, `uid=` in a login log, a second Aadhaar after `and` with no label of its own, and three cases where the "(Aadhaar)" right-attachment rescue fired on a parenthetical sentence (`AWB 5283… (carry Aadhaar for open-box delivery)`) — the model is right in all six.
+(The baseline's false-positive count fell from 52 in the earlier draft to 22 because detections lying inside labelled PII of another type — a PIN code inside an address — are now "unknown" rather than negatives in corpora that do not label nesting; the markup format does not.) Every remaining error is listed in `RESULTS.md`; the residual false positives are test-fixture dummies and the genuinely ambiguous `uid=` login-log case, and the model's two dropped true positives are the `id_type / id_number` CSV pattern and a mobile with no label of its own — both now generated in training data, both kept by the rules.
 
 ### 5.3 What the ML adds beyond rules
 
-The rules get ~62–72 % of the false positives on synthetic data and 88 % on the golden set because attribution plus competing labels *is* most of the problem. The model adds the cases rules cannot express: generic or missing headers combined with other evidence (`id_number` next to an `acct` column), the long tail of context words (`login`, `password`, `test`, `ref` two tokens away), interactions between shape and claim (12 contiguous digits claimed as a bank account next to an Aadhaar label), and calibrated confidence that lets you trade retention for reduction per entity type (the sweep). The model is also where real-world feedback can go; rules only grow by hand.
+The rules get ~77 % of the false positives on synthetic data and 86 % on the golden set because attribution plus competing labels *is* most of the problem. The model adds the cases rules cannot express: generic or missing headers combined with other evidence (`id_number` next to an `acct` column), the long tail of context words (`login`, `password`, `test`, `ref` two tokens away), interactions between shape and claim (12 contiguous digits claimed as a bank account next to an Aadhaar label), and calibrated confidence that lets you trade retention for reduction per entity type (the sweep). The model is also where real-world feedback can go; rules only grow by hand.
 
 Where the model is weaker than rules: under distribution shift it is over-confident (the first golden run dropped 7 % of true positives because thresholds learned on synthetic data sat at 0.99; capping thresholds at 0.5 fixed it) and it has no notion it has not seen (SQL columns before the attribution step learned them). Run both: rules as the floor, model on top, and log disagreements.
 
@@ -119,7 +119,7 @@ Where the model is weaker than rules: under distribution shift it is over-confid
 
 1. **Attribution alone fixes the brief's example** — the nearest label on the left with no value in between, plus "a label followed by its own value does not also label the previous value". This is a 200-line change to the existing gate.
 2. **Competing-label suppression needs a catalogue of the *other* identifiers.** The product knows what Aadhaar keywords look like; it also needs to know what `UTR`, `RRN`, `AWB`, `PPO`, `PRAN`, `APAAR`, `CIF`, `consumer no`, `IMEI` look like. That list is in `pkg/pii/labels` and is the single most reusable artifact of this POC.
-3. **The keyword gate costs recall.** 17 % of labelled PII in the synthetic test set is never proposed because no keyword is within 60 characters (identity-card text, bare table cells, headerless exports). Replacing the gate with the model's score (score every regex + checksum match) raised recall from 82.9 % to 95.0 % at a precision *better* than today's baseline (93.5 % vs 87.2 %) — see "Keyword gate vs. model gate" in `RESULTS.md`. On the golden set: 94.0 % → 98.0 % (it recovers the identity-card names and the header-less CSV's Aadhaar and IFSC values). That is a product decision (it changes what gets reported), but it is the single largest recall lever available.
+3. **The keyword gate costs recall.** 17 % of labelled PII in the synthetic test set is never proposed because no keyword is within 60 characters (identity-card text, bare table cells, headerless exports). Replacing the gate with the model's score (score every regex + checksum match) raises recall by roughly twelve points at a precision still above today's baseline — see "Keyword gate vs. model gate" in `RESULTS.md` for the current figures. On the golden set: 94.0 % → 97.3 % (it recovers the identity-card names and the header-less CSV's Aadhaar and IFSC values). That is a product decision (it changes what gets reported), but it is the single largest recall lever available.
 
 Two smaller ones: Aadhaar numbers never start with 0 or 1, which already excludes UAN (1…) and PRAN (11…) shapes; and `uid` should be a weak keyword — in logs it means user id.
 
