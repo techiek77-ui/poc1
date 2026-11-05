@@ -74,8 +74,20 @@ func main() {
 	cfgLinR := eval.Config{Name: "A linear +resolve", Scores: linTest, Thresholds: thL, Default: defL, Resolve: true}
 	cfgRulesR := eval.Config{Name: "1 rules @0.5 +resolve", Scores: rulesTest, Default: 0.5, Resolve: true}
 
+	cfgs := []eval.Config{base, cfgRules, cfgRulesT, cfgRulesR, cfgLin, cfgLinR}
+	// optional Tier B (ONNX transformer), only with -tags onnx and -onnx <dir>
+	bVer, closeB := extraVerifier()
+	defer closeB()
+	var bTest []float64
+	var bDur time.Duration
+	if bVer != nil {
+		bDev, _, _ := eval.Scores(devItems, bVer)
+		bTest, _, bDur = eval.Scores(testItems, bVer)
+		thB, defB := eval.ChooseThresholds(devItems, bDev, *retain, 30)
+		cfgs = append(cfgs, eval.Config{Name: "B onnx", Scores: bTest, Thresholds: thB, Default: defB})
+	}
 	var results []*eval.Result
-	for _, cfg := range []eval.Config{base, cfgRules, cfgRulesT, cfgRulesR, cfgLin, cfgLinR} {
+	for _, cfg := range cfgs {
 		results = append(results, eval.Evaluate(testItems, cfg, truthTest, *nEx))
 	}
 	sb.WriteString(eval.Markdown(results, "Gated candidates (the product's detections)"))

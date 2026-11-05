@@ -1,0 +1,12 @@
+{
+ "version": "smoke",
+ "base": "none (random)",
+ "max_len": 128,
+ "inputs": [
+  "input_ids",
+  "attention_mask"
+ ],
+ "thresholds": {},
+ "default_threshold": 0.5,
+ "model_file": "model.onnx"
+}
