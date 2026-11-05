@@ -3,3 +3,7 @@ data/
 # scratch
 *.log
 /bin/
+# ONNX artifacts: fp32 exports and benchmark-only models are large and reproducible
+models/bench_*/
+models/**/model.onnx
+!models/tier_b_smoke/model.onnx

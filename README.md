@@ -79,6 +79,14 @@ encoder, e.g. `--base microsoft/MiniLM-L12-H384-uncased`.
 PII_ORT_LIB=/path/to/libonnxruntime.so go run -tags onnx ./cmd/piieval -onnx models/tier_b
 ```
 
+```bash
+PII_ORT_LIB=/path/to/libonnxruntime.so go run -tags onnx ./cmd/piibench -onnx models/tier_b -n 300
+```
+
+`piibench` measures per-candidate latency (tokenize + ONNX Runtime) from Go on one
+intra-op thread; `PII_ORT_THREADS` raises the thread count on servers. `scripts/run_all.sh`
+reproduces everything in one go.
+
 The Go runtime needs the ONNX Runtime shared library (≈27 MB on Linux x64, from the
 official GitHub releases) plus `model.int8.onnx`, `tokenizer.json` and
 `manifest.json`; the model is data, not code, so a retrained model is a file push.

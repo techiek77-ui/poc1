@@ -91,7 +91,21 @@ func New(dir string) (*Verifier, error) {
 	if len(inputs) == 0 {
 		inputs = []string{"input_ids", "attention_mask"}
 	}
-	sess, err := ort.NewDynamicAdvancedSession(filepath.Join(dir, m.ModelFile), inputs, []string{"logits"}, nil)
+	opts, err := ort.NewSessionOptions()
+	if err != nil {
+		return nil, err
+	}
+	defer opts.Destroy()
+	// One intra-op thread per session: predictable per-core cost on endpoints;
+	// servers scale by running several sessions/goroutines (PII_ORT_THREADS overrides).
+	threads := 1
+	if s := os.Getenv("PII_ORT_THREADS"); s != "" {
+		fmt.Sscanf(s, "%d", &threads)
+	}
+	if err := opts.SetIntraOpNumThreads(threads); err != nil {
+		return nil, err
+	}
+	sess, err := ort.NewDynamicAdvancedSession(filepath.Join(dir, m.ModelFile), inputs, []string{"logits"}, opts)
 	if err != nil {
 		return nil, fmt.Errorf("onnx session: %w", err)
 	}

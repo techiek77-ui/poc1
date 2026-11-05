@@ -30,6 +30,7 @@ func main() {
 	l2 := flag.Float64("l2", 1e-6, "L2 regularisation")
 	minCount := flag.Int("mincount", 3, "minimum feature count")
 	posw := flag.Float64("posw", 1.0, "weight of positive examples")
+	prune := flag.Float64("prune", 0.0, "drop weights with |w| below this after training (smaller artifact)")
 	flag.Parse()
 
 	docs, err := corpus.Load(*corpusPath)
@@ -62,6 +63,15 @@ func main() {
 	t0 = time.Now()
 	m := verify.Train(examples, o)
 	fmt.Printf("trained %d weights in %.1fs\n", len(m.Weights), time.Since(t0).Seconds())
+	if *prune > 0 {
+		before := len(m.Weights)
+		for f, w := range m.Weights {
+			if w < float32(*prune) && w > -float32(*prune) {
+				delete(m.Weights, f)
+			}
+		}
+		fmt.Printf("pruned |w|<%g: %d -> %d weights\n", *prune, before, len(m.Weights))
+	}
 
 	devItems, _ := eval.Collect(dev, gated, *window)
 	lin := &verify.Linear{M: m}
@@ -83,7 +93,7 @@ func main() {
 		"dev_precision":       res.Total.Precision(),
 		"train_examples_pos":  pos,
 		"train_examples_neg":  len(examples) - pos,
-		"optimizer":           fmt.Sprintf("adagrad lr=%g l2=%g epochs=%d mincount=%d posw=%g", *lr, *l2, *epochs, *minCount, *posw),
+		"optimizer":           fmt.Sprintf("adagrad lr=%g l2=%g epochs=%d mincount=%d posw=%g prune=%g", *lr, *l2, *epochs, *minCount, *posw, *prune),
 		"candidate_generator": "regex+checksum, ungated for training, gated for thresholds",
 	}
 	if err := os.MkdirAll(filepath.Dir(*out), 0o755); err != nil {
