@@ -272,8 +272,10 @@ Shipping: the ONNX Runtime shared library (28 MB for 1.31.1 on Linux x64, from t
 official GitHub releases; `onnxruntime.dll` on Windows), `model.int8.onnx`,
 `tokenizer.json`, `manifest.json`. The Go binding (`onnxruntime_go` v1.38) needs ONNX
 Runtime ≥ 1.31 — with 1.29 it fails with "requested API version [31] is not
-available". CGO on Linux/macOS; on Windows the DLL is loaded without CGO. GPU servers
-would add the CUDA execution provider.
+available". It needs CGO on every platform (on Windows that means a MinGW
+toolchain, natively or `x86_64-w64-mingw32-gcc` when cross-compiling from Linux); the
+library itself is loaded at runtime from `PII_ORT_LIB`. GPU servers would add the CUDA
+execution provider.
 
 ## 8a. Which models, and why
 
@@ -343,9 +345,20 @@ CGO_ENABLED=1 go run -tags onnx ./cmd/piibench -onnx models/tier_b -n 100
 
 Notes: use `onnxruntime-osx-x86_64-…` on Intel Macs, or ship both and pick at runtime; a downloaded dylib may carry the quarantine attribute (`xattr -d com.apple.quarantine libonnxruntime.1.31.1.dylib`) and, inside a signed/notarised app bundle, must be codesigned with the app (`codesign --force --sign "Developer ID Application: …" --timestamp libonnxruntime.1.31.1.dylib`) and placed in `Contents/Frameworks` with `PII_ORT_LIB` (or the binding's `SetSharedLibraryPath`) pointing there; `PII_ORT_EP=coreml` enables the CoreML provider on Apple Silicon. Cross-compiling the `onnx` build tag needs a C toolchain for the target (`CGO_ENABLED=1`, e.g. `CC=o64-clang GOOS=darwin GOARCH=arm64`), or build natively per platform in CI.
 
-Windows: `onnxruntime-win-x64-1.31.1.zip` → `lib/onnxruntime.dll`; the Go binding loads the DLL through `LoadLibrary`, so the `onnx` build tag works **without CGO** on Windows (`CGO_ENABLED=0 GOOS=windows go build -tags onnx ./cmd/piiscan`); set `PII_ORT_LIB` to the DLL path or place it next to the executable. The Python tooling (`ml/`) is development-only and not shipped.
+Windows: `onnxruntime-win-x64-1.31.1.zip` → `lib/onnxruntime.dll`; the binding loads the DLL at runtime through `LoadLibrary`, but the Go package itself still needs CGO to compile: build natively with MinGW-w64 (`CGO_ENABLED=1 go build -tags onnx ./cmd/piiscan`) or cross-compile from Linux with `CC=x86_64-w64-mingw32-gcc CGO_ENABLED=1 GOOS=windows GOARCH=amd64 go build -tags onnx ./cmd/piiscan`; set `PII_ORT_LIB` to the DLL path or place it next to the executable. (Verified in this sandbox: `CGO_ENABLED=0` excludes the binding's files on every OS.) The Python tooling (`ml/`) is development-only and not shipped.
 
 Linux endpoints: `onnxruntime-linux-x64-1.31.1.tgz` (glibc) — for musl/Alpine images build ONNX Runtime from source or use the glibc base image; `onnxruntime-linux-aarch64-…` for ARM servers.
+
+## 8e. Platform support
+
+| component | Linux pod (x64/arm64) | Linux endpoint | Windows endpoint | macOS endpoint |
+|---|---|---|---|---|
+| Rules + Tier A (`go build`, no tag) | static binary, distroless image (`Dockerfile`) | static binary | static `.exe` | static binary, amd64 + arm64 |
+| Tier B (`-tags onnx`) | glibc image (`Dockerfile --build-arg ONNX=1`) + `libonnxruntime.so`; GPU pods: `-gpu` release + CUDA, `PII_ORT_EP=cuda` | `libonnxruntime.so` next to the binary, CGO build | `onnxruntime.dll`, CGO (MinGW) build | `libonnxruntime.dylib`, CGO build on a Mac runner, codesign, `PII_ORT_EP=coreml` optional |
+| NER (planned) | same as Tier B | same as Tier B; 4-layer models for low-volume devices | same | same |
+| Model updates | file push (`tier_a_lr.json`, `models/tier_b/*`) | same | same | same |
+
+Verified here with `scripts/crossbuild.sh`: the pure-Go scanner builds for linux/amd64, linux/arm64, windows/amd64, darwin/amd64 and darwin/arm64 with `CGO_ENABLED=0` (2.4–2.6 MB each, no shared-library dependencies); the ONNX-enabled binary builds on Linux with CGO (7.4 MB + the 28 MB runtime library). Alpine/musl pods: the pure-Go image is static and fine; for Tier B use a glibc base image (as in the `Dockerfile`) because the official ONNX Runtime binaries are glibc builds. Memory: Tier A ~25 MB; a MiniLM-6 int8 session ~150–250 MB.
 
 ## 9. Integrating with the product
 
