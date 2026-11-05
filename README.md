@@ -390,6 +390,37 @@ Verified here with `scripts/crossbuild.sh`: the pure-Go scanner builds for linux
   floor in every version so a bad retrain degrades to today's behaviour.
 * **Monitoring**: suppression share and score histogram per entity type.
 
+## 10a. Bringing your own data and retraining
+
+Retraining is a file-in, file-out operation; no code changes. Three input forms are accepted everywhere a `-corpus` flag is (`piitrain`, `piieval`, `piiexport`; the flag is repeatable, so synthetic and real data are mixed in one run):
+
+1. **Hand-marked snippets** (`.txt`): the golden-set markup. Paste real lines, mark PII as `[[TYPE:value]]` and look-alikes as `[[-:kind:value]]`; everything unmarked counts as "not PII". Separate documents with `=== <format> <shape> <title>`. See `testdata/sample_real.txt`.
+2. **Decision records** (`.jsonl`): one analyst judgement per line, straight from a review queue —
+   `{"text": "<the line or snippet>", "format": "text", "value": "965147382010", "type": "AADHAAR", "decision": "fp"}`
+   (`start`/`end` byte offsets instead of `value` when the same digits occur twice; `decision` is `tp` or `fp`; optional `split` and `id`). Records become *partially labelled* documents: only the judged candidate is used for training and scoring, nothing else in the snippet is assumed. A rejected AADHAAR claim says nothing about a BANK_ACCOUNT claim on the same digits, and the loader respects that. See `testdata/sample_decisions.jsonl`.
+3. **Full documents** (`.jsonl` of `pii.Doc`) with byte-offset spans — what `piigen` writes; use it if you label whole files with a tool.
+
+Suggested workflow:
+
+```bash
+# 1. measure first: real data as the test set, model unchanged
+go run ./cmd/piieval -corpus data/corpus.jsonl -corpus reviews.jsonl -real-split test -model models/tier_a_lr.json -out docs/RESULTS.md
+```
+
+```bash
+# 2. retrain with real data added (weighted 3x by default) once you have a few hundred judgements
+go run ./cmd/piitrain -corpus data/corpus.jsonl -corpus reviews.jsonl -corpus snippets.txt -real-split hash -weight-real 3 -out models/tier_a_lr.json
+```
+
+```bash
+# 3. same for Tier B: export windows, then ml/train_tier_b.py as before
+go run ./cmd/piiexport -corpus data/corpus.jsonl -corpus reviews.jsonl -out data/tierb
+```
+
+`-real-split` places real documents that carry no `split`: `train`, `dev`, `test`, or `hash` (80/10/10 by id). `piieval` prints a separate "Real documents" table for the real part of the evaluated split, so the synthetic numbers never hide what happens on your data. The artifact manifest records every input file with its hash.
+
+Privacy: store the snippet around the detection (the 60-character window is enough) and the decision, not the files; strip anything else before it leaves the scanner. The whole retrain runs offline on your side.
+
 ## 11. Limitations
 
 * Training and most evaluation data are synthetic; the golden set is a smoke test.

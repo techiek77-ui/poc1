@@ -55,6 +55,11 @@ type TruthSpan struct {
 	End   int        `json:"end"`
 	Type  EntityType `json:"type"`
 	Kind  string     `json:"kind"`
+	// Claim restricts the span to detections of one claimed type. Analyst
+	// feedback is of the form "this AADHAAR detection was wrong": that says
+	// nothing about a BANK_ACCOUNT claim on the same digits, so in a partially
+	// labelled document only candidates of the claimed type use the span.
+	Claim EntityType `json:"claim,omitempty"`
 }
 
 // Doc is one synthetic file.
@@ -65,6 +70,13 @@ type Doc struct {
 	Shape  string      `json:"shape"` // prose, form, csv, json, log, code, ocr, card
 	Text   string      `json:"text"`
 	Truth  []TruthSpan `json:"truth"`
+	// Partial marks a document whose spans are the only thing known about it
+	// (analyst feedback, hand-marked snippets): candidates that overlap no span
+	// are ignored rather than counted as false positives.
+	Partial bool `json:"partial,omitempty"`
+	// Source is "" for the synthetic generator and "real" for data brought in
+	// through markup or feedback files; training can weight real examples.
+	Source string `json:"source,omitempty"`
 }
 
 // Candidate is one detection emitted by the baseline detector: a regex match

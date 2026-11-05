@@ -34,15 +34,21 @@ type row struct {
 }
 
 func main() {
-	corpusPath := flag.String("corpus", "data/corpus.jsonl", "JSONL corpus")
+	var corpora corpus.Paths
+	flag.Var(&corpora, "corpus", "corpus file (piigen JSONL, markup .txt, or decision JSONL); repeatable")
+	realSplit := flag.String("real-split", "train", "split for real documents that carry none")
 	out := flag.String("out", "data/tierb", "output directory")
 	window := flag.Int("window", 60, "context window")
 	flag.Parse()
 
-	docs, err := corpus.Load(*corpusPath)
+	if len(corpora) == 0 {
+		corpora = corpus.Paths{"data/corpus.jsonl"}
+	}
+	docs, err := corpus.LoadAll(corpora)
 	if err != nil {
 		fail(err)
 	}
+	corpus.AssignSplits(docs, *realSplit)
 	if err := os.MkdirAll(*out, 0o755); err != nil {
 		fail(err)
 	}

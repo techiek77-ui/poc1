@@ -1,0 +1,5 @@
+=== text sms Example of a hand-marked snippet
+Salary credited to A/c [[BANK_ACCOUNT:473829105645]]. UAN [[UAN:100234567890]]. Update Aadhaar in the UAN portal.
+
+=== log log Example with a reference number
+2026-11-03 11:03:10 WARN [aeps] txn ref=[[-:txn_id:839204715626]] aadhaar=[[AADHAAR:571029384614]] declined

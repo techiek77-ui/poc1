@@ -22,7 +22,9 @@ import (
 )
 
 func main() {
-	corpusPath := flag.String("corpus", "data/corpus.jsonl", "JSONL corpus")
+	var corpora corpus.Paths
+	flag.Var(&corpora, "corpus", "corpus file (piigen JSONL, markup .txt, or decision JSONL); repeatable")
+	realSplit := flag.String("real-split", "test", "split for real documents that carry none: train|dev|test|hash")
 	modelPath := flag.String("model", "models/tier_a_lr.json", "Tier A model artifact")
 	window := flag.Int("window", 60, "context window")
 	retain := flag.Float64("retain", 0.99, "TP retention target for threshold selection")
@@ -33,11 +35,17 @@ func main() {
 	dump := flag.String("dump", "", "write every test candidate with scores to this JSONL file (error analysis)")
 	flag.Parse()
 
-	docs, err := corpus.Load(*corpusPath)
+	if len(corpora) == 0 {
+		corpora = corpus.Paths{"data/corpus.jsonl"}
+	}
+	docs, err := corpus.LoadAll(corpora)
 	if err != nil {
 		fail(err)
 	}
+	corpus.AssignSplits(docs, *realSplit)
 	dev, test := corpus.Split(docs, "dev"), corpus.Split(docs, *split)
+	corpusPath := new(string)
+	*corpusPath = corpora.String()
 	m, err := verify.Load(*modelPath)
 	if err != nil {
 		fail(err)
@@ -114,6 +122,25 @@ func main() {
 	sb.WriteString("| candidate set | TP | FP | precision | recall vs. all labelled spans |\n|---|---:|---:|---:|---:|\n")
 	for _, r := range []*eval.Result{baseG, linG, baseU, linU} {
 		fmt.Fprintf(&sb, "| %s | %d | %d | %.1f%% | %.1f%% |\n", r.Name, r.Total.TP, r.Total.FP, 100*r.Total.Precision(), 100*r.OverallRecall())
+	}
+
+	// --- real documents in the evaluated split ----------------------------------------
+	if real := corpus.Real(test); len(real) > 0 {
+		rItems, _ := eval.Collect(real, gated, *window)
+		rTruth := eval.TruthCounts(real)
+		rRules, _, _ := eval.Scores(rItems, rules)
+		rLin, _, _ := eval.Scores(rItems, lin)
+		var rr []*eval.Result
+		for _, cfg := range []eval.Config{
+			{Name: "0 baseline", Scores: ones(len(rItems)), Default: 0.5},
+			{Name: "1 rules @0.5", Scores: rRules, Default: 0.5},
+			{Name: "A linear", Scores: rLin, Thresholds: thL, Default: defL},
+		} {
+			rr = append(rr, eval.Evaluate(rItems, cfg, rTruth, *nEx))
+		}
+		fmt.Fprintf(&sb, "\n### Real documents in the %s split (%d documents, %d judged candidates)\n\n", *split, len(real), len(rItems))
+		sb.WriteString("Thresholds are the ones chosen on dev; partially labelled documents only count the candidates an analyst judged.\n\n")
+		sb.WriteString(eval.Markdown(rr, "Real data"))
 	}
 
 	// --- golden set ------------------------------------------------------------------

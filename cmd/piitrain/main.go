@@ -12,6 +12,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/techiek77-ui/poc1/pkg/pii/corpus"
@@ -21,7 +22,10 @@ import (
 )
 
 func main() {
-	corpusPath := flag.String("corpus", "data/corpus.jsonl", "JSONL corpus from piigen")
+	var corpora corpus.Paths
+	flag.Var(&corpora, "corpus", "corpus file: piigen JSONL, [[TYPE:value]] markup (.txt), or decision records (JSONL with a 'decision' field); repeatable")
+	realSplit := flag.String("real-split", "train", "split for real documents that carry none: train|dev|test|hash")
+	weightReal := flag.Float64("weight-real", 3, "training weight of examples from real documents")
 	out := flag.String("out", "models/tier_a_lr.json", "model artifact path")
 	window := flag.Int("window", 60, "context window (chars each side)")
 	retain := flag.Float64("retain", 0.99, "share of baseline true positives to keep when choosing thresholds")
@@ -33,12 +37,16 @@ func main() {
 	prune := flag.Float64("prune", 0.0, "drop weights with |w| below this after training (smaller artifact)")
 	flag.Parse()
 
-	docs, err := corpus.Load(*corpusPath)
+	if len(corpora) == 0 {
+		corpora = corpus.Paths{"data/corpus.jsonl"}
+	}
+	docs, err := corpus.LoadAll(corpora)
 	if err != nil {
 		fail(err)
 	}
+	corpus.AssignSplits(docs, *realSplit)
 	train, dev := corpus.Split(docs, "train"), corpus.Split(docs, "dev")
-	fmt.Printf("corpus: %d docs (train %d, dev %d)\n", len(docs), len(train), len(dev))
+	fmt.Printf("corpus: %d docs (train %d, dev %d, real %d)\n", len(docs), len(train), len(dev), len(corpus.Real(docs)))
 
 	// Train on ungated candidates so the model also learns what a missing
 	// keyword means; thresholds are chosen on the product's gated candidates.
@@ -52,6 +60,9 @@ func main() {
 	pos := 0
 	for i, it := range trainItems {
 		examples[i] = verify.Example{Feats: verify.Features(&it.Cand, it.A), Label: it.TP, Type: it.Cand.Type}
+		if it.Doc.Source == "real" {
+			examples[i].Weight = float32(*weightReal)
+		}
 		if it.TP {
 			pos++
 		}
@@ -84,7 +95,11 @@ func main() {
 	fmt.Printf("dev: baseline TP %d FP %d | linear TP %d FP %d | retention %.2f%% | FP reduction %.1f%%\n",
 		base.Total.TPBase, base.Total.FPBase, res.Total.TP, res.Total.FP, 100*res.Total.Retention(), 100*res.Total.FPReduction())
 
-	m.TrainingData = fmt.Sprintf("%s sha256:%s", filepath.Base(*corpusPath), fileHash(*corpusPath))
+	var td []string
+	for _, p := range corpora {
+		td = append(td, fmt.Sprintf("%s sha256:%s", filepath.Base(p), fileHash(p)))
+	}
+	m.TrainingData = strings.Join(td, "; ")
 	m.Notes = map[string]any{
 		"window":              *window,
 		"retention_target":    *retain,
@@ -95,6 +110,9 @@ func main() {
 		"train_examples_neg":  len(examples) - pos,
 		"optimizer":           fmt.Sprintf("adagrad lr=%g l2=%g epochs=%d mincount=%d posw=%g prune=%g", *lr, *l2, *epochs, *minCount, *posw, *prune),
 		"candidate_generator": "regex+checksum, ungated for training, gated for thresholds",
+		"real_documents":      len(corpus.Real(docs)),
+		"real_split":          *realSplit,
+		"weight_real":         *weightReal,
 	}
 	if err := os.MkdirAll(filepath.Dir(*out), 0o755); err != nil {
 		fail(err)

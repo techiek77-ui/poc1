@@ -1,0 +1,4 @@
+{"text": "Dear customer, your Aadhaar 2847 1930 5622 has been linked to account 965147382010 successfully.", "format": "text", "value": "2847 1930 5622", "type": "AADHAAR", "decision": "tp"}
+{"text": "Dear customer, your Aadhaar 2847 1930 5622 has been linked to account 965147382010 successfully.", "format": "text", "value": "965147382010", "type": "AADHAAR", "decision": "fp"}
+{"text": "UPI txn of Rs 999 to AADHAAR SEVA KENDRA successful. UPI Ref 440291873659.", "format": "text", "start": 62, "end": 74, "type": "AADHAAR", "decision": "fp"}
+{"text": "emp_id,name,aadhaar\nE1,Kiran Patil,839204715626\n", "format": "csv", "value": "839204715626", "type": "AADHAAR", "decision": "tp", "split": "dev"}

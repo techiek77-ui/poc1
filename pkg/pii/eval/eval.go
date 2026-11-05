@@ -41,6 +41,15 @@ func Collect(docs []pii.Doc, det *detect.Detector, window int) ([]Item, time.Dur
 		for _, c := range det.Detect(v) {
 			it := Item{Doc: doc, View: v, Cand: c}
 			it.TP, it.TruthIdx, it.Category = match(doc, &c)
+			if doc.Partial {
+				// only what an analyst actually judged is usable
+				if it.TruthIdx < 0 {
+					continue
+				}
+				if cl := doc.Truth[it.TruthIdx].Claim; cl != "" && cl != c.Type {
+					continue
+				}
+			}
 			t0 := time.Now()
 			it.A = attrib.Analyze(v, &it.Cand, window)
 			analyze += time.Since(t0)
