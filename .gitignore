@@ -1,0 +1,5 @@
+# generated corpora are large and fully reproducible from piigen (seeded)
+data/
+# scratch
+*.log
+/bin/

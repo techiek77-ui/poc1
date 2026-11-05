@@ -1,0 +1,243 @@
+=== text sms Bank credit SMS
+Dear Customer, INR 12,500.00 credited to your A/c no [[BANK_ACCOUNT:965147382010]] on 03-11-26 by UPI Ref No [[-:rrn:630814123456]]. Avl Bal INR 48,210.55. -ICICI Bank
+
+=== text sms UPI payment to an Aadhaar centre
+UPI txn of Rs 999 to AADHAAR SEVA KENDRA successful. UPI Ref [[-:rrn:440291873659]]. Not you? Call 18001234. -PhonePe
+
+=== text chat WhatsApp message
+bhai mera aadhar no [[AADHAAR:738192045614]] hai aur account [[BANK_ACCOUNT:509347182063]] sbi ka, ifsc [[IFSC:SBIN0001234]] bhej diya. mobile [[MOBILE:98765 43210]] pe call karna
+
+=== text email HR onboarding email
+Hi Priya,
+
+Please find my details for onboarding:
+Name - [[NAME:Arjun Mehta]]
+DOB - [[DOB:14/08/1992]]
+PAN - [[PAN:BNZPM2501F]]
+Aadhaar - [[AADHAAR:284719305622]]
+UAN (previous employer) - [[UAN:100987654321]]
+Bank: HDFC, A/c [[BANK_ACCOUNT:50100234567890]], IFSC [[IFSC:HDFC0001234]]
+Emergency contact: [[NAME:Sunita Mehta]], [[MOBILE:+91 98200 12345]]
+
+Regards,
+[[NAME:Arjun Mehta]]
+
+=== log log Application log where uid means user id
+2026-11-03T10:15:22Z INFO auth-svc login ok uid=48213 ip=10.2.3.4 session=[[-:ticket:9f3a1c77]]
+2026-11-03T10:15:23Z INFO kyc-svc aadhaar verify uid=48213 ref=[[-:txn_id:965147382010]] status=OK
+2026-11-03T10:15:24Z INFO kyc-svc aadhaar verify done uid=48213 elapsed=[[-:count:1204]]ms
+
+=== log log JSON log line with a real Aadhaar
+{"ts":"2026-11-03T10:16:01Z","svc":"ekyc","event":"otp_sent","aadhaar":"[[AADHAAR:965147382010]]","mobile":"[[MOBILE:9876543210]]","txnId":"[[-:txn_id:T2311031016010001]]"}
+
+=== csv csv Export with ambiguous headers
+cust_id,name,id_number,id_type,acct,mobile
+[[-:customer_id:10023]],[[NAME:Ramesh Kumar]],[[AADHAAR:440291873659]],AADHAAR,[[BANK_ACCOUNT:617382049150]],[[MOBILE:9123456780]]
+[[-:customer_id:10024]],[[NAME:Sunil Yadav]],[[PAN:ABCPY1234D]],PAN,[[BANK_ACCOUNT:30912345678]],[[MOBILE:9988776655]]
+
+=== csv csv EPFO member export
+UAN,Member ID,Name,Aadhaar,DOJ
+[[UAN:100123456789]],[[-:customer_id:MHBAN00123450000012345]],[[NAME:Kiran Patil]],[[AADHAAR:839204715626]],01/04/2019
+[[UAN:100223344556]],[[-:customer_id:MHBAN00123450000012346]],[[NAME:Asha Shinde]],[[AADHAAR:650192837451]],15/07/2021
+
+=== text form Insurance proposal form
+PROPOSAL FORM
+Proposer Name : Smt. [[NAME:Geeta Rani]]
+Date of Birth : [[DOB:22-03-1975]]
+Aadhaar No. : [[AADHAAR:571029384614]]
+Policy No. : [[-:policy:394850172636]]
+PAN : [[PAN:AKLPR4521Q]]
+Nominee : [[NAME:Rohit Rani]] (Son)
+Premium : Rs. 12,400/-
+
+=== text form NPS statement
+NATIONAL PENSION SYSTEM - Statement of Transaction
+PRAN : [[-:pran:110012345678]]
+Subscriber Name : [[NAME:Deepak Sharma]]
+Aadhaar (masked) : [[-:aadhaar_masked:XXXX XXXX 5614]]
+PAN : [[PAN:FGHPS5566K]]
+Tier I balance : Rs 4,52,310.00
+
+=== text prose Pension PPO letter
+Your Pension Payment Order (PPO) No. [[-:ppo:702619483524]] has been issued. Aadhaar seeding for pension disbursal is mandatory; please visit the branch with your Aadhaar card. Pension A/c: [[BANK_ACCOUNT:258391047616]] (SBI).
+
+=== text prose Electricity bill
+BESCOM - Electricity Bill
+Consumer No: [[-:consumer_no:839204715626]] | Aadhaar linked: NO
+Name: [[NAME:Nagaraj Gowda]]
+Address: [[ADDRESS:No 45, 3rd Cross, Jayanagar 4th Block, Bengaluru 560011]]
+Bill Amount: Rs 1,245  Due Date: 15/11/2026
+
+=== text prose LPG subsidy message
+Indane LPG: Your consumer number [[-:consumer_no:617382049150]] has been linked with Aadhaar [[AADHAAR:965147382010]] for DBTL. Subsidy of Rs 200 credited to bank a/c [[BANK_ACCOUNT:3012345678]].
+
+=== text prose ITR acknowledgement
+INDIAN INCOME TAX RETURN ACKNOWLEDGEMENT
+PAN [[PAN:AAAPL1234C]]  Name [[NAME:LAKSHMI NARAYAN]]  Assessment Year 2025-26
+Aadhaar Number [[AADHAAR:473829105645]]
+Acknowledgement Number [[-:customer_id:123456789012345]]  Date 31-07-2025
+Status: Successfully e-verified
+
+=== text prose GST invoice
+TAX INVOICE
+Invoice No: [[-:invoice:INV/25-26/00123]]  Date: 05/11/2025
+Supplier: Shree Traders, GSTIN [[GSTIN:27AAPFU0939F1ZV]]
+Buyer: Nova Pharma Ltd, GSTIN [[GSTIN:07AAGFF2194N1Z1]]
+HSN 300490  Qty 120  Rate 85.00  Amount 10,200.00
+E-way Bill No: [[-:invoice:301928475630]]  Vehicle: [[-:vehicle:MH12AB1234]]
+
+=== text prose E-commerce shipment notification
+Your order [[-:order_id:OD528374619208123]] has shipped! AWB [[-:tracking:528374619208]] (carry Aadhaar for open-box delivery). Deliver to: [[NAME:Pooja Nair]], [[ADDRESS:Flat 302, Lotus Residency, Kothrud, Pune 411038]], Ph [[MOBILE:9823012345]].
+
+=== text prose Telecom KYC SMS
+Airtel: Your SIM re-verification is done using Aadhaar ending 5614. Mobile [[MOBILE:9876501234]]. SIM No [[-:device_id:8991000012345678901]] IMEI [[-:device_id:356938035643809]].
+
+=== text prose Loan sanction letter
+Dear Mr. [[NAME:Vikram Singh]],
+
+We are pleased to sanction your Home Loan. Loan Account Number: [[BANK_ACCOUNT:793018462512]] (KYC: Aadhaar verified). EMI of Rs 24,310 will be debited from your savings account [[BANK_ACCOUNT:20098765432]] (IFSC [[IFSC:UTIB0000456]]). Documents received: Aadhaar, PAN ([[PAN:CRTPS8899L]]).
+
+=== text form Passport application
+Applicant: [[NAME:Fatima Sheikh]]
+File No: [[-:customer_id:MU1068123456789]]
+Passport No: [[PASSPORT:M1234567]]
+Aadhaar: [[AADHAAR:419283746504]]
+Present Address: [[ADDRESS:12/4, Mohammed Ali Road, Mumbai, Maharashtra 400003]]
+Police Station: Pydhonie
+
+=== text form Driving licence
+DL No: [[DRIVING_LICENCE:MH02 20150012345]]
+Name: [[NAME:Sachin Pawar]]
+DOB: [[DOB:02-10-1988]]
+Blood Group: B+
+Valid Till: 01-10-2038
+Address: [[ADDRESS:B-14, Shivaji Nagar, Thane West, Thane - 400601]]
+
+=== csv csv Voter list extract
+Sl No|EPIC No|Name|Father's Name|Age|House No
+1|[[VOTER_ID:ABC1234567]]|[[NAME:Geeta Devi]]|[[NAME:Ram Prasad]]|42|14
+2|[[VOTER_ID:XYZ7654321]]|[[NAME:Mohan Lal]]|[[NAME:Shyam Lal]]|58|15
+
+=== text prose Student APAAR notice
+Dear Parent, APAAR ID [[-:apaar:571029384614]] has been generated for [[NAME:Ananya Rao]] (Class 8B) using the Aadhaar number submitted at admission. Verify at abc.gov.in.
+
+=== text prose Credit card statement
+HDFC Bank Credit Card Statement
+Card No: [[CREDIT_CARD:4532 0123 4567 8902]]
+Name: [[NAME:ROHAN KAPOOR]]
+Total Due: Rs 18,450.00  Min Due: Rs 925.00
+03/11  AMAZON PAY  Ref [[-:rrn:530712345678]]  Rs 1,299.00
+04/11  IRCTC  Ref [[-:rrn:530812345679]]  PNR [[-:pnr:8401629375]]  Rs 2,150.00
+
+=== text prose IMPS failure SMS
+IMPS Ref [[-:rrn:682739104538]] failed (beneficiary bank Aadhaar not seeded). Amount Rs 5,000 reversed to A/c [[BANK_ACCOUNT:35719204861478]]. -Axis Bank
+
+=== text code SQL dump
+INSERT INTO kyc (id, full_name, aadhaar_no, pan_no, acct_no) VALUES (1, '[[NAME:Harish Bhat]]', '[[AADHAAR:840162937518]]', '[[PAN:AEXPB7712M]]', '[[BANK_ACCOUNT:293847561021]]');
+
+=== text code Python test fixture with dummy numbers
+TEST_AADHAAR = "[[-:dummy:888888888887]]"
+TEST_PAN = "[[-:dummy:ABCPE1234F]]"
+TEST_ACCOUNT = "[[-:dummy:234567890124]]"
+TEST_MOBILE = "[[-:dummy:9999999999]]"
+
+=== json json API response
+{"status":"success","data":{"customer":{"name":"[[NAME:Meera Iyer]]","kyc":{"aadhaarNumber":"[[AADHAAR:357192048614]]","panNumber":"[[PAN:ALWPI9087R]]"},"accounts":[{"accountNumber":"[[BANK_ACCOUNT:650192837451]]","ifsc":"[[IFSC:ICIC0000123]]"}],"mobile":"[[MOBILE:+919812345678]]"}}}
+
+=== text prose Support ticket
+Ticket #[[-:ticket:INC0098123]]
+Customer says Aadhaar OTP not received. Registered mobile [[MOBILE:9000012345]]. Aadhaar last 4: 5614. Customer ID [[-:customer_id:88123456]]. Agent: [[NAME:Priyanka Das]].
+
+=== text prose Hostel room allotment
+Room 204: [[NAME:Amit Kumar]], [[NAME:Rahul Verma]], [[NAME:Sameer Khan]]. Room 205: [[NAME:Ravi Shankar]], [[NAME:Vikas Gupta]]. Warden: Mr. [[NAME:Suresh Rao]].
+
+=== text prose Capitalised words that are not names
+Please Note: Bank Account Statements Are Available Online. Thank You For Choosing Prime Finserv. Customer Care Team.
+
+=== text ocr Aadhaar card front
+GOVERNMENT OF INDIA
+[[NAME:Suresh Babu]]
+S/O: [[NAME:Venkata Rao]]
+DOB: [[DOB:12/06/1980]]
+MALE
+
+[[AADHAAR:2847 1930 5622]]
+VID : [[VID:9123 4567 8901 2346]]
+Mera Aadhaar, Meri Pehchaan
+
+=== text ocr Aadhaar card with OCR noise
+G0VERNMENT 0F INDIA
+[[NAME:Lakshmi Devi]]
+D0B : [[DOB:05/01/1965]]
+FEMALE
+[[AADHAAR:7381 9204 5614]]
+Aadhaar - Aam Aadmi ka Adhikar
+
+=== text ocr PAN card
+INCOME TAX DEPARTMENT  GOVT. OF INDIA
+Permanent Account Number Card
+[[PAN:BNZPM2501F]]
+Name
+[[NAME:ARJUN MEHTA]]
+Father's Name
+[[NAME:RAJESH MEHTA]]
+Date of Birth
+[[DOB:14/08/1992]]
+
+=== text ocr Passbook with OCR noise
+STATE BANK 0F INDIA
+Acc0unt N0: [[BANK_ACCOUNT:965147382010]]
+Cust0mer Name: [[NAME:RAMESH KUMAR]]
+CIF N0: [[-:customer_id:87654321098]]
+IFSC: [[IFSC:SBIN0004321]]
+Aadhaar Seeded: Yes
+
+=== log log Key-value log with Aadhaar and account
+2026-11-03 11:02:45 INFO [kyc] link aadhaar=[[AADHAAR:440291873659]] acct=[[BANK_ACCOUNT:617382049150]] status=LINKED latency=88ms
+
+=== log log Log where a reference precedes the Aadhaar
+2026-11-03 11:03:10 WARN [aeps] txn ref=[[-:txn_id:839204715626]] aadhaar=[[AADHAAR:571029384614]] declined reason=INSUFFICIENT_BALANCE
+
+=== csv csv Header-less export
+[[NAME:Anita Desai]],[[AADHAAR:394850172636]],[[BANK_ACCOUNT:702619483524]],[[IFSC:BARB0MUMBAI]]
+[[NAME:Kamal Jain]],[[AADHAAR:258391047616]],[[BANK_ACCOUNT:1234567890123]],[[IFSC:PUNB0123400]]
+
+=== text prose Mobile numbers written with the 91 prefix
+Customer called from [[MOBILE:919876543216]] regarding Aadhaar update; alternate number [[MOBILE:918765432103]].
+
+=== text prose Aadhaar enrolment slip
+Aadhaar Enrolment No: [[-:aadhaar_eid:1234/12345/12345]]  Date: 03/11/2026 10:15:22
+Name: [[NAME:Nisha Agarwal]]
+Mobile: [[MOBILE:9876543211]]
+Your Aadhaar will be sent within 90 days.
+
+=== text prose FASTag recharge
+FASTag recharge for vehicle [[-:vehicle:MH12AB1234]] of Rs 500 successful. Txn ID [[-:txn_id:650192837451]]. Link Aadhaar with FASTag? Not required.
+
+=== text email Payroll email
+Hi [[NAME:Kavita]],
+Your salary for Oct has been credited to A/c [[BANK_ACCOUNT:473829105645]]. UAN: [[UAN:100234567890]]. PF contribution Rs 1,800. Please update Aadhaar in the UAN portal.
+Payroll Team
+
+=== text prose Rent agreement
+This agreement is made between Mr. [[NAME:Anil Kapoor]] (Aadhaar No. [[AADHAAR:301928475630]]), resident of [[ADDRESS:D-14, Sector 15, Noida, Uttar Pradesh 201301]], hereinafter the Landlord, and Ms. [[NAME:Shruti Nair]] (Aadhaar No. [[AADHAAR:528374619208]]), hereinafter the Tenant. Monthly rent Rs 18,000 payable to A/c [[BANK_ACCOUNT:91234567890]].
+
+=== text prose Masked and partial numbers
+Aadhaar ending 5614 and card ending 8902 are linked. Full card: [[CREDIT_CARD:5288 1234 5678 9017]]. Virtual ID [[VID:8345 6789 0123 4561]].
+
+=== text prose uid as a login id with a 12-digit value
+Login failed for uid=[[-:customer_id:682739104538]] from 10.0.0.7; password reset link sent. Aadhaar-based eKYC is not enabled for this tenant.
+
+=== csv csv Excel export with a notes column
+Employee Code,Employee Name,Aadhaar No,Bank Account No,IFSC,Notes
+[[-:customer_id:E10234]],[[NAME:Tarun Mehra]],[[AADHAAR:419283746504]],[[BANK_ACCOUNT:840162937518]],[[IFSC:KKBK0000261]],"Joined 01-Apr; aadhaar copy pending"
+[[-:customer_id:E10235]],[[NAME:Zoya Khan]],[[AADHAAR:293847561021]],[[BANK_ACCOUNT:50100987654321]],[[IFSC:HDFC0000123]],"Bank acc updated on 03-Nov, old acc [[BANK_ACCOUNT:357192048614]]"
+
+=== text prose Canonical example from the brief
+aadhar [[AADHAAR:738192045614]], bank acc [[BANK_ACCOUNT:509347182063]]
+
+=== text prose Canonical example, reversed order
+bank acc [[BANK_ACCOUNT:509347182063]], aadhar [[AADHAAR:738192045614]]
+
+=== text prose Two Aadhaar numbers, one label
+Aadhaar numbers of the couple: [[AADHAAR:284719305622]] and [[AADHAAR:965147382010]]. Joint account [[BANK_ACCOUNT:440291873659]].
