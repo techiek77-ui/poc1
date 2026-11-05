@@ -1,27 +1,28 @@
 {
  "base": "scratch bert tiny L4 H256 vocab 8000",
  "params": 5405442,
- "train_seconds": 2352.2406644821167,
- "dev": {
-  "tp": 13156,
-  "fp": 1506,
-  "tp_base": 13251,
-  "fp_base": 1904,
-  "retention": 0.9928307297562448,
-  "fp_reduction": 0.20903361344537819,
-  "precision": 0.8972854999317965
- },
- "test": {
-  "tp": 26358,
-  "fp": 2937,
-  "tp_base": 26544,
-  "fp_base": 3727,
-  "retention": 0.9929927667269439,
-  "fp_reduction": 0.21196672927287363,
-  "precision": 0.8997439836149513
- },
+ "train_seconds": 2183.110711336136,
  "onnx_bytes": 21710267,
  "int8_bytes": 5603658,
- "py_latency_ms_fp32_1thread": 1.9783878326416013,
- "py_latency_ms_int8_1thread": 0.8547639846801758
+ "dev": {
+  "tp": 12836,
+  "fp": 1485,
+  "tp_base": 12889,
+  "fp_base": 1683,
+  "retention": 0.9958879664830476,
+  "fp_reduction": 0.11764705882352944,
+  "precision": 0.8963061238740312
+ },
+ "test": {
+  "tp": 26181,
+  "fp": 2821,
+  "tp_base": 26370,
+  "fp_base": 3246,
+  "retention": 0.9928327645051195,
+  "fp_reduction": 0.13093037584719658,
+  "precision": 0.9027308461485415
+ },
+ "eval_model": "model.int8.onnx via onnxruntime",
+ "py_latency_ms_fp32_1thread": 2.4069929122924805,
+ "py_latency_ms_int8_1thread": 0.8794641494750977
 }

@@ -1,5 +1,5 @@
 {
- "version": "20261105T030200Z",
+ "version": "20261105T053202Z",
  "base": "scratch bert tiny L4 H256 vocab 8000",
  "max_len": 128,
  "inputs": [
@@ -7,26 +7,29 @@
   "attention_mask"
  ],
  "thresholds": {
-  "AADHAAR": 0.008976889774203299,
-  "ADDRESS": 0.49345561861991877,
-  "BANK_ACCOUNT": 0.008888326585292814,
+  "AADHAAR": 0.006644750013947486,
+  "ADDRESS": 0.5,
+  "BANK_ACCOUNT": 0.007099889684468507,
   "CREDIT_CARD": 0.5,
-  "DOB": 0.09226834028959273,
+  "DOB": 0.01718777976930141,
   "DRIVING_LICENCE": 0.5,
   "EMAIL": 0.5,
   "GSTIN": 0.5,
   "IFSC": 0.5,
-  "MOBILE": 0.2734591662883758,
-  "NAME": 0.010040944442152975,
+  "MOBILE": 0.06919046491384505,
+  "NAME": 0.11698929965496062,
   "PAN": 0.5,
   "PASSPORT": 0.5,
-  "PINCODE": 0.021430568769574162,
-  "UAN": 0.03747189417481422,
+  "PINCODE": 0.007737694773823022,
+  "UAN": 0.0063039674423635,
   "UPI_ID": 0.5,
-  "VID": 0.20438168942928311,
-  "VOTER_ID": 0.18322013318538663
+  "VID": 0.14306373894214627,
+  "VOTER_ID": 0.006798066664487123
  },
- "default_threshold": 0.011163082905113695,
+ "default_threshold": 0.009885893203318117,
  "model_file": "model.int8.onnx",
- "params": 5405442
+ "params": 5405442,
+ "normalizer": "BertNormalizer{\"clean_text\": true, \"handle_chinese_chars\": false, \"lowercase\": true, \"strip_accents\": true}",
+ "training_data": "train_ungated.jsonl sha256:dd3ced61d0191b11",
+ "thresholds_from": "model.int8.onnx on dev_gated, retention target 0.99 with margin, cap 0.5"
 }
